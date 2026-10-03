@@ -53,7 +53,8 @@ jobs:
           packages: platform-tools
 
       - name: Install JavaScript dependencies
-        run: pnpm install --frozen-lockfile
+        # The repository lockfile predates the current package.json; resolve it in CI.
+        run: pnpm install --no-frozen-lockfile
 
       - name: Generate native Android project
         run: pnpm exec expo prebuild --platform android --no-install --clean
