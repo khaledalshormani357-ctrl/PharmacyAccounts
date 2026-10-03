@@ -1,0 +1,102 @@
+name: Build Android APK Artifact
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "app/**"
+      - "components/**"
+      - "constants/**"
+      - "contexts/**"
+      - "services/**"
+      - "template/**"
+      - "assets/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "app.json"
+      - ".github/workflows/android-apk-artifact.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build-android-apk:
+    name: Build armeabi-v7a APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Install Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install JavaScript dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate native Android project
+        run: pnpm exec expo prebuild --platform android --no-install --clean
+
+      - name: Restrict native libraries to armeabi-v7a
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("android/app/build.gradle")
+          text = path.read_text()
+          marker = '        versionName "1.0.0"\n'
+          insertion = marker + "        ndk {\n            abiFilters 'armeabi-v7a'\n        }\n"
+          if "abiFilters 'armeabi-v7a'" not in text:
+              if marker not in text:
+                  raise SystemExit("Could not find Android defaultConfig marker")
+              text = text.replace(marker, insertion, 1)
+              path.write_text(text)
+          PY
+          grep -n -A8 -B3 "abiFilters" android/app/build.gradle
+
+      - name: Build release APK
+        working-directory: android
+        run: ./gradlew assembleRelease --no-daemon --stacktrace
+
+      - name: Verify APK ABI and prepare artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifact
+          APK=$(find android/app/build/outputs/apk/release -maxdepth 1 -name '*.apk' -type f | head -n 1)
+          test -n "$APK"
+          cp "$APK" artifact/PharmacyAccounts-armeabi-v7a.apk
+          unzip -t artifact/PharmacyAccounts-armeabi-v7a.apk >/dev/null
+          ABIS=$(unzip -l artifact/PharmacyAccounts-armeabi-v7a.apk | awk '{print $4}' | grep '^lib/' | cut -d/ -f2 | sort -u)
+          test "$ABIS" = "armeabi-v7a"
+          sha256sum artifact/PharmacyAccounts-armeabi-v7a.apk > artifact/SHA256SUMS.txt
+          ls -lh artifact/
+          printf 'Verified ABI: %s\n' "$ABIS"
+
+      - name: Upload APK as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PharmacyAccounts-armeabi-v7a-apk
+          path: artifact/
+          if-no-files-found: error
+          retention-days: 14
