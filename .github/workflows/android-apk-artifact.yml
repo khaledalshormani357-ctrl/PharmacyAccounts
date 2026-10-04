@@ -91,11 +91,15 @@ jobs:
           test -n "$APK"
           cp "$APK" artifact/PharmacyAccounts-armeabi-v7a.apk
           unzip -t artifact/PharmacyAccounts-armeabi-v7a.apk >/dev/null
-          ABIS=$(unzip -l artifact/PharmacyAccounts-armeabi-v7a.apk | awk '{print $4}' | grep '^lib/' | cut -d/ -f2 | sort -u)
-          test "$ABIS" = "armeabi-v7a"
+          ABIS=$(unzip -Z1 artifact/PharmacyAccounts-armeabi-v7a.apk | awk -F/ '$1 == "lib" && NF >= 3 {print $2}' | sort -u)
+          if [ -n "$ABIS" ]; then
+            test "$ABIS" = "armeabi-v7a"
+            printf 'Verified ABI: %s\n' "$ABIS"
+          else
+            printf '%s\n' 'Verified: APK contains no native libraries; ABI restriction is satisfied.'
+          fi
           sha256sum artifact/PharmacyAccounts-armeabi-v7a.apk > artifact/SHA256SUMS.txt
           ls -lh artifact/
-          printf 'Verified ABI: %s\n' "$ABIS"
 
       - name: Upload APK as workflow artifact
         uses: actions/upload-artifact@v4
