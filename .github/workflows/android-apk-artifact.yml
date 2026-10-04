@@ -24,7 +24,7 @@ jobs:
   build-android-apk:
     name: Build armeabi-v7a APK
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
 
     steps:
       - name: Checkout
