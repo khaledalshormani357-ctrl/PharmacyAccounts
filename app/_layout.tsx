@@ -4,9 +4,9 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { Stack } from 'expo-router';
 import { ThemeProvider, useTheme } from '@/contexts/ThemeContext';
 import { useEffect, useState, useCallback } from 'react';
-import { I18nManager, Platform } from 'react-native';
+import { Platform } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
-import { getSetting, isSetupDone } from '@/services/database';
+import { databaseReady, getSetting } from '@/services/database';
 import { PinLock } from '@/components/ui';
 
 function AppShell() {
@@ -82,12 +82,13 @@ function AppShell() {
 }
 
 export default function RootLayout() {
+  const [storageReady, setStorageReady] = useState(false);
+
   useEffect(() => {
-    if (Platform.OS !== 'web' && !I18nManager.isRTL) {
-      I18nManager.allowRTL(true);
-      I18nManager.forceRTL(true);
-    }
+    databaseReady.finally(() => setStorageReady(true));
   }, []);
+
+  if (!storageReady) return null;
 
   return (
     <AlertProvider>

@@ -78,7 +78,9 @@ jobs:
 
       - name: Build release APK
         working-directory: android
-        run: ./gradlew assembleRelease --no-daemon --stacktrace
+        run: |
+          printf '\norg.gradle.jvmargs=-Xmx6g -XX:MaxMetaspaceSize=1g -Dfile.encoding=UTF-8\norg.gradle.workers.max=2\nexpo.useLegacyPackaging=true\n' >> gradle.properties
+          ./gradlew assembleRelease --no-daemon --max-workers=2 --stacktrace
 
       - name: Verify APK ABI and prepare artifact
         shell: bash

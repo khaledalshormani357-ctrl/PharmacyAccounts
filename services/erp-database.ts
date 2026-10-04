@@ -1,6 +1,7 @@
-// Smart Pharmacy ERP — Complete Database Service (In-Memory / Web Preview)
-// All business entities, repositories, and business logic in one service layer.
-// SQLite integration is architecture-ready via the same interface.
+// Smart Pharmacy ERP — Complete Database Service
+// The in-memory repository is persisted to device storage so data survives restarts.
+
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // ═══════════════════════════════════════════════════════════
 // TYPES & INTERFACES
@@ -430,10 +431,39 @@ const ids = {
 
 let invoiceCounter = 1000;
 let setupDone = false;
+const STORE_KEY = '@pharmacy_accounts/store/v1';
+let persistQueue: Promise<void> = Promise.resolve();
 
 // ─── Helpers ──────────────────────────────────────────────
 const now = () => new Date().toISOString().replace('T', ' ').slice(0, 19);
 const today = () => new Date().toISOString().split('T')[0];
+export const getToday = today;
+
+function persistStore(): void {
+  const snapshot = JSON.stringify({ store, ids, invoiceCounter });
+  persistQueue = persistQueue
+    .catch(() => undefined)
+    .then(() => AsyncStorage.setItem(STORE_KEY, snapshot))
+    .catch(() => undefined);
+}
+
+async function hydrateStore(): Promise<void> {
+  try {
+    const raw = await AsyncStorage.getItem(STORE_KEY);
+    if (!raw) return;
+    const saved = JSON.parse(raw) as { store?: typeof store; ids?: typeof ids; invoiceCounter?: number };
+    if (saved.store) {
+      Object.keys(store).forEach((key) => {
+        const value = saved.store?.[key as keyof typeof store];
+        if (value !== undefined) (store as any)[key] = value;
+      });
+    }
+    if (saved.ids) Object.assign(ids, saved.ids);
+    if (typeof saved.invoiceCounter === 'number') invoiceCounter = saved.invoiceCounter;
+  } catch {
+    // A corrupt local snapshot must not prevent the app from opening.
+  }
+}
 
 function simpleHash(password: string): string {
   let h = 0;
@@ -476,6 +506,7 @@ function initDefaults() {
 }
 
 initDefaults();
+export const databaseReady: Promise<void> = hydrateStore();
 
 // ═══════════════════════════════════════════════════════════
 // SETTINGS
@@ -487,6 +518,7 @@ export function getSetting(key: string): string | null {
 
 export function setSetting(key: string, value: string): void {
   store.settings[key] = value;
+  persistStore();
 }
 
 export function getAllSettings(): Record<string, string> {
@@ -1963,6 +1995,7 @@ function addAuditLog(data: {
     ip: null,
     created_at: now(),
   });
+  persistStore();
 }
 
 export function getAuditLogs(opts?: { limit?: number; entity?: string }): AuditLog[] {

@@ -157,7 +157,7 @@ export default function AddPurchaseScreen() {
           {items.length === 0 ? (
             <View style={{ alignItems: 'center', paddingVertical: 40 }}>
               <MaterialIcons name="shopping-cart" size={48} color={theme.colors.textTertiary} />
-              <Text style={{ fontSize: 14, color: theme.colors.textTertiary, marginTop: 12 }}>اضغط "إضافة صنف" لإضافة منتجات الفاتورة</Text>
+              <Text style={{ fontSize: 14, color: theme.colors.textTertiary, marginTop: 12 }}>اضغط &quot;إضافة صنف&quot; لإضافة منتجات الفاتورة</Text>
             </View>
           ) : (
             items.map((item, index) => (
