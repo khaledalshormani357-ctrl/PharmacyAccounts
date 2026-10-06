@@ -8,6 +8,7 @@ import { Platform } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { databaseReady, getSetting } from '@/services/database';
 import { PinLock } from '@/components/ui';
+import { CloudAuthGate } from '@/components/CloudAuthGate';
 
 function AppShell() {
   const { theme } = useTheme();
@@ -50,6 +51,7 @@ function AppShell() {
       <Stack screenOptions={{ headerShown: false, animation: 'slide_from_left' }}>
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
         <Stack.Screen name="setup" options={{ headerShown: false }} />
+        <Stack.Screen name="login" options={{ headerShown: false }} />
         <Stack.Screen name="pos" options={{ headerShown: false }} />
         <Stack.Screen name="add-product" options={{ headerShown: false, presentation: 'modal' }} />
         <Stack.Screen name="product-detail" options={{ headerShown: false }} />
@@ -92,11 +94,13 @@ export default function RootLayout() {
 
   return (
     <AlertProvider>
-      <SafeAreaProvider>
-        <ThemeProvider>
-          <AppShell />
-        </ThemeProvider>
-      </SafeAreaProvider>
+      <CloudAuthGate>
+        <SafeAreaProvider>
+          <ThemeProvider>
+            <AppShell />
+          </ThemeProvider>
+        </SafeAreaProvider>
+      </CloudAuthGate>
     </AlertProvider>
   );
 }
