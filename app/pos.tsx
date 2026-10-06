@@ -10,7 +10,7 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useTheme } from '@/contexts/ThemeContext';
 import {
-  getProducts, getCustomers, createSale,
+  getProducts, getCustomers, createSale, getProductUnits,
   Product, Customer, getSetting, getProductStock,
 } from '@/services/database';
 import { formatCurrency, AR } from '@/constants/i18n';
@@ -23,6 +23,8 @@ interface CartItem {
   unit_price: string;
   discount: string;
 }
+
+const unitOptions = (product: Product) => getProductUnits(product.id);
 
 export default function PosScreen() {
   const { theme } = useTheme();
@@ -76,7 +78,7 @@ export default function PosScreen() {
         product,
         quantity: '1',
         unit: product.inventory_unit,
-        unit_price: String(product.selling_price),
+        unit_price: String(getProductUnits(product.id).find(u => u.is_sale_default)?.sale_price ?? product.selling_price),
         discount: '0',
       }, ...prev]);
     }
@@ -85,6 +87,13 @@ export default function PosScreen() {
   const updateCartItem = (index: number, field: keyof CartItem, value: string) => {
     const updated = [...cart];
     updated[index] = { ...updated[index], [field]: value };
+    setCart(updated);
+  };
+
+  const selectUnit = (index: number, unit: string) => {
+    const definition = unitOptions(cart[index].product).find(u => u.unit_name === unit);
+    const updated = [...cart];
+    updated[index] = { ...updated[index], unit, unit_price: String(definition?.sale_price ?? updated[index].product.selling_price) };
     setCart(updated);
   };
 
@@ -268,6 +277,18 @@ export default function PosScreen() {
                     </View>
                   ))}
                 </View>
+                {unitOptions(item.product).length > 0 && (
+                  <View style={{ marginTop: 9 }}>
+                    <Text style={{ fontSize: 10, color: theme.colors.textTertiary, textAlign: 'right', marginBottom: 4 }}>وحدة البيع</Text>
+                    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 6, flexDirection: 'row' }}>
+                      {unitOptions(item.product).map(unit => (
+                        <TouchableOpacity key={unit.id} onPress={() => selectUnit(index, unit.unit_name)} style={{ paddingHorizontal: 10, paddingVertical: 5, borderRadius: 14, backgroundColor: item.unit === unit.unit_name ? theme.colors.primary : theme.colors.surfaceAlt, borderWidth: 1, borderColor: item.unit === unit.unit_name ? theme.colors.primary : theme.colors.border }}>
+                          <Text style={{ color: item.unit === unit.unit_name ? '#FFFFFF' : theme.colors.textSecondary, fontSize: 11 }}>{unit.unit_name} × {unit.conversion_factor}</Text>
+                        </TouchableOpacity>
+                      ))}
+                    </ScrollView>
+                  </View>
+                )}
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 8 }}>
                   <Text style={{ fontSize: 13, fontWeight: '700', color: theme.colors.primary }}>
                     {formatCurrency((parseFloat(item.quantity) || 0) * (parseFloat(item.unit_price) || 0) - (parseFloat(item.discount) || 0), currencySymbol)}

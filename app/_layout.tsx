@@ -76,6 +76,7 @@ function AppShell() {
         <Stack.Screen name="backup" options={{ headerShown: false }} />
         <Stack.Screen name="assistant" options={{ headerShown: false }} />
         <Stack.Screen name="settings" options={{ headerShown: false }} />
+        <Stack.Screen name="users" options={{ headerShown: false }} />
         <Stack.Screen name="sale-detail" options={{ headerShown: false }} />
         <Stack.Screen name="purchase-detail" options={{ headerShown: false }} />
       </Stack>

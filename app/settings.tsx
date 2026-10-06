@@ -5,7 +5,7 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '@/contexts/ThemeContext';
-import { getSetting, setSetting } from '@/services/database';
+import { getSetting, setSetting, getOpeningBalance, addOpeningBalance } from '@/services/database';
 import { useAlert } from '@/template';
 import { PinSetup } from '@/components/ui';
 
@@ -23,6 +23,8 @@ export default function SettingsScreen() {
   const [showPinSetup, setShowPinSetup] = useState(false);
   const [pinAction, setPinAction] = useState<'setup' | 'change'>('setup');
   const [saved, setSaved] = useState(false);
+  const [openingBalance, setOpeningBalance] = useState('');
+  const [openingBalanceTotal, setOpeningBalanceTotal] = useState(0);
 
   useEffect(() => {
     setPharmacyName(getSetting('pharmacy_name') || '');
@@ -30,6 +32,7 @@ export default function SettingsScreen() {
     setCurrency(getSetting('currency') || 'ريال سعودي');
     setCurrencySymbol(getSetting('currency_symbol') || 'ر.س');
     setPinEnabled(getSetting('pin_enabled') === 'true');
+    setOpeningBalanceTotal(getOpeningBalance());
   }, []);
 
   const handleSave = () => {
@@ -40,6 +43,15 @@ export default function SettingsScreen() {
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
     showAlert('تم', 'تم حفظ الإعدادات');
+  };
+
+  const handleOpeningBalance = () => {
+    const amount = parseFloat(openingBalance);
+    if (!Number.isFinite(amount) || amount <= 0) { showAlert('تنبيه', 'أدخل مبلغاً صحيحاً أكبر من صفر'); return; }
+    addOpeningBalance(amount);
+    setOpeningBalance('');
+    setOpeningBalanceTotal(getOpeningBalance());
+    showAlert('تم', 'تم تسجيل الرصيد الافتتاحي في الصندوق');
   };
 
   const handlePinToggle = (val: boolean) => {
@@ -100,6 +112,15 @@ export default function SettingsScreen() {
           </View>
         </View>
 
+        <Text style={{ fontSize: 13, fontWeight: '700', color: theme.colors.textPrimary, textAlign: 'right', marginBottom: 12, borderRightWidth: 3, borderRightColor: theme.colors.primary, paddingRight: 8 }}>الرصيد الافتتاحي</Text>
+        <View style={{ backgroundColor: theme.colors.surface, borderRadius: 12, borderWidth: 1, borderColor: theme.colors.border, padding: 14, marginBottom: 14 }}>
+          <Text style={{ fontSize: 12, color: theme.colors.textSecondary, textAlign: 'right', marginBottom: 8 }}>الإجمالي المسجل: {openingBalanceTotal.toFixed(2)} {currencySymbol}</Text>
+          <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
+            <TouchableOpacity onPress={handleOpeningBalance} style={{ backgroundColor: theme.colors.primary, borderRadius: 8, paddingHorizontal: 13, paddingVertical: 12 }}><Text style={{ color: '#FFFFFF', fontWeight: '700' }}>إضافة</Text></TouchableOpacity>
+            <TextInput style={[inputStyle, { flex: 1 }]} value={openingBalance} onChangeText={setOpeningBalance} keyboardType="decimal-pad" placeholder="مبلغ جديد" placeholderTextColor={theme.colors.textTertiary} />
+          </View>
+        </View>
+
         {/* Theme */}
         <Text style={{ fontSize: 13, fontWeight: '700', color: theme.colors.textPrimary, textAlign: 'right', marginBottom: 12, borderRightWidth: 3, borderRightColor: theme.colors.primary, paddingRight: 8 }}>المظهر</Text>
         <View style={{ backgroundColor: theme.colors.surface, borderRadius: 12, borderWidth: 1, borderColor: theme.colors.border, padding: 14, marginBottom: 14 }}>
@@ -133,7 +154,7 @@ export default function SettingsScreen() {
           {[
             { label: 'النسخ الاحتياطي', icon: 'backup', route: '/backup', color: '#00875A' },
             { label: 'سجل التدقيق', icon: 'history', route: '/audit-log', color: '#172B4D' },
-            { label: 'المستخدمون', icon: 'manage-accounts', route: '/settings', color: '#0052CC' },
+            { label: 'المستخدمون', icon: 'manage-accounts', route: '/users', color: '#0052CC' },
           ].map((item, i) => (
             <TouchableOpacity key={item.label} onPress={() => router.push(item.route as any)} style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 14, borderBottomWidth: i < 2 ? 1 : 0, borderBottomColor: theme.colors.divider }}>
               <MaterialIcons name="chevron-left" size={18} color={theme.colors.textTertiary} />

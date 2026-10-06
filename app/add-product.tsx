@@ -8,13 +8,14 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useTheme } from '@/contexts/ThemeContext';
-import { addProduct, getProduct, updateProduct, addProductUnit } from '@/services/database';
+import { addProduct, getProduct, updateProduct, getProductUnits, replaceProductUnits } from '@/services/database';
 import { AR } from '@/constants/i18n';
 import { useAlert } from '@/template';
 
 const DOSAGE_FORMS = ['أقراص', 'كبسول', 'شراب', 'حقن', 'كريم', 'مرهم', 'قطرة', 'بخاخ', 'تحاميل', 'مسحوق', 'أخرى'];
 const CATEGORIES = ['مضادات حيوية', 'مسكنات', 'فيتامينات', 'قلب وأوعية', 'جهاز هضمي', 'جهاز تنفسي', 'عيون وأذن', 'جلدية', 'مستلزمات طبية', 'أخرى'];
 const UNITS = ['قطعة', 'علبة', 'شريط', 'حبة', 'زجاجة', 'كرتون', 'أمبول', 'أنبوب', 'كيس'];
+type UnitDraft = { unit_name: string; conversion_factor: string; sale_price: string; purchase_price: string };
 
 export default function AddProductScreen() {
   const { theme } = useTheme();
@@ -41,6 +42,7 @@ export default function AddProductScreen() {
   const [prescriptionRequired, setPrescriptionRequired] = useState(false);
   const [controlled, setControlled] = useState(false);
   const [notes, setNotes] = useState('');
+  const [units, setUnits] = useState<UnitDraft[]>([]);
 
   // Load existing product if editing
   React.useEffect(() => {
@@ -64,9 +66,23 @@ export default function AddProductScreen() {
         setPrescriptionRequired(p.prescription_required);
         setControlled(p.controlled);
         setNotes(p.notes || '');
+        setUnits(getProductUnits(p.id).map(u => ({ unit_name: u.unit_name, conversion_factor: String(u.conversion_factor), sale_price: String(u.sale_price ?? p.selling_price), purchase_price: String(u.purchase_price ?? p.default_purchase_price) })));
       }
     }
   }, [id]);
+
+  const normalizedUnits = (baseUnit: string, baseSale: number, basePurchase: number) => {
+    const entered = units.filter(u => u.unit_name.trim()).map(u => ({
+      unit_name: u.unit_name.trim(),
+      conversion_factor: Math.max(0.0001, parseFloat(u.conversion_factor) || 1),
+      sale_price: Math.max(0, parseFloat(u.sale_price) || 0),
+      purchase_price: Math.max(0, parseFloat(u.purchase_price) || 0),
+      is_purchase_default: u.unit_name.trim() === baseUnit,
+      is_sale_default: u.unit_name.trim() === baseUnit,
+    }));
+    if (!entered.some(u => u.unit_name === baseUnit)) entered.unshift({ unit_name: baseUnit, conversion_factor: 1, sale_price: baseSale, purchase_price: basePurchase, is_purchase_default: true, is_sale_default: true });
+    return entered;
+  };
 
   const handleSave = () => {
     if (!tradeName.trim()) { showAlert('تنبيه', 'أدخل الاسم التجاري للصنف'); return; }
@@ -96,11 +112,11 @@ export default function AddProductScreen() {
     try {
       if (isEdit) {
         updateProduct(parseInt(id!), data);
+        replaceProductUnits(parseInt(id!), normalizedUnits(inventoryUnit, parseFloat(sellingPrice) || 0, parseFloat(purchasePrice) || 0));
         showAlert('تم', 'تم تحديث الصنف', [{ text: 'موافق', onPress: () => router.back() }]);
       } else {
         const product = addProduct(data);
-        // Add default units
-        addProductUnit({ product_id: product.id, unit_name: inventoryUnit, conversion_factor: 1, is_purchase_default: true, is_sale_default: true });
+        replaceProductUnits(product.id, normalizedUnits(inventoryUnit, parseFloat(sellingPrice) || 0, parseFloat(purchasePrice) || 0));
         showAlert('تم', 'تم إضافة الصنف', [{ text: 'موافق', onPress: () => router.back() }]);
       }
     } catch (e: any) {
@@ -196,6 +212,29 @@ export default function AddProductScreen() {
               <TextInput style={inputStyle} value={purchasePrice} onChangeText={setPurchasePrice} keyboardType="numeric" placeholder="0.00" placeholderTextColor={theme.colors.textTertiary} />
             </View>
           </View>
+
+          {sectionTitle('الوحدات والأسعار المتعددة')}
+          <Text style={{ fontSize: 11, color: theme.colors.textTertiary, textAlign: 'right', marginBottom: 8 }}>
+            مثال: علبة = 10 شرائط، ويمكن بيع كل وحدة بسعر مستقل.
+          </Text>
+          {units.map((unit, index) => (
+            <View key={`${index}-${unit.unit_name}`} style={{ backgroundColor: theme.colors.surfaceAlt, borderRadius: 9, padding: 9, marginBottom: 8 }}>
+              <View style={{ flexDirection: 'row', gap: 7, alignItems: 'center' }}>
+                <TouchableOpacity onPress={() => setUnits(prev => prev.filter((_, i) => i !== index))}>
+                  <MaterialIcons name="delete-outline" size={19} color={theme.colors.error} />
+                </TouchableOpacity>
+                <TextInput style={[inputStyle, { flex: 1, height: 40 }]} value={unit.unit_name} onChangeText={v => setUnits(prev => prev.map((u, i) => i === index ? { ...u, unit_name: v } : u))} placeholder="اسم الوحدة" placeholderTextColor={theme.colors.textTertiary} />
+                <TextInput style={[inputStyle, { width: 82, height: 40, textAlign: 'center' }]} value={unit.conversion_factor} onChangeText={v => setUnits(prev => prev.map((u, i) => i === index ? { ...u, conversion_factor: v } : u))} keyboardType="decimal-pad" placeholder="التحويل" placeholderTextColor={theme.colors.textTertiary} />
+              </View>
+              <View style={{ flexDirection: 'row', gap: 8, marginTop: 7 }}>
+                <TextInput style={[inputStyle, { flex: 1, height: 38 }]} value={unit.sale_price} onChangeText={v => setUnits(prev => prev.map((u, i) => i === index ? { ...u, sale_price: v } : u))} keyboardType="decimal-pad" placeholder="سعر البيع" placeholderTextColor={theme.colors.textTertiary} />
+                <TextInput style={[inputStyle, { flex: 1, height: 38 }]} value={unit.purchase_price} onChangeText={v => setUnits(prev => prev.map((u, i) => i === index ? { ...u, purchase_price: v } : u))} keyboardType="decimal-pad" placeholder="سعر الشراء" placeholderTextColor={theme.colors.textTertiary} />
+              </View>
+            </View>
+          ))}
+          <TouchableOpacity onPress={() => setUnits(prev => [...prev, { unit_name: '', conversion_factor: '1', sale_price: sellingPrice, purchase_price: purchasePrice }])} style={{ borderWidth: 1, borderColor: theme.colors.primary, borderRadius: 8, paddingVertical: 9, alignItems: 'center', marginBottom: 8 }}>
+            <Text style={{ color: theme.colors.primary, fontWeight: '700', fontSize: 13 }}>+ إضافة وحدة أخرى</Text>
+          </TouchableOpacity>
 
           <View style={{ flexDirection: 'row', gap: 10, marginTop: 10 }}>
             <View style={{ flex: 1 }}>

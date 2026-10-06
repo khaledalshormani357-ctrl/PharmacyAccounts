@@ -79,6 +79,8 @@ export interface ProductUnit {
   product_id: number;
   unit_name: string;
   conversion_factor: number; // how many inventory_units in this unit
+  sale_price?: number;
+  purchase_price?: number;
   is_purchase_default: boolean;
   is_sale_default: boolean;
 }
@@ -622,7 +624,20 @@ export function addUser(data: {
     created_at: now(),
   };
   store.users.push(user);
+  persistStore();
   return user;
+}
+
+export function updateUser(id: number, data: Partial<Pick<User, 'full_name' | 'role' | 'phone' | 'active'> & { password: string }>): void {
+  const user = store.users.find(u => u.id === id);
+  if (!user) return;
+  if (data.full_name !== undefined) user.full_name = data.full_name;
+  if (data.role !== undefined) user.role = data.role;
+  if (data.phone !== undefined) user.phone = data.phone;
+  if (data.active !== undefined) user.active = data.active;
+  if (data.password) user.password_hash = simpleHash(data.password);
+  addAuditLog({ action: 'USER_UPDATE', entity: 'user', entity_id: id, after_data: JSON.stringify({ username: user.username, active: user.active, role: user.role }) });
+  persistStore();
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -687,7 +702,35 @@ export function getProductUnits(product_id: number): ProductUnit[] {
 export function addProductUnit(data: Omit<ProductUnit, 'id'>): ProductUnit {
   const unit: ProductUnit = { ...data, id: ids.productUnits++ };
   store.productUnits.push(unit);
+  persistStore();
   return unit;
+}
+
+export function replaceProductUnits(product_id: number, units: Array<Omit<ProductUnit, 'id' | 'product_id'>>): ProductUnit[] {
+  store.productUnits = store.productUnits.filter(u => u.product_id !== product_id);
+  const saved = units.map(unit => addProductUnit({ ...unit, product_id }));
+  addAuditLog({ action: 'PRODUCT_UNITS_UPDATE', entity: 'product', entity_id: product_id,
+    after_data: JSON.stringify(saved) });
+  persistStore();
+  return saved;
+}
+
+export function getOpeningBalance(): number {
+  return store.cashTransactions
+    .filter(t => t.type === 'OPENING')
+    .reduce((sum, t) => sum + t.amount, 0);
+}
+
+export function addOpeningBalance(amount: number, note = 'رصيد افتتاحي إضافي', user_id?: number): boolean {
+  if (!Number.isFinite(amount) || amount <= 0) return false;
+  store.cashTransactions.push({
+    id: ids.cashTx++, type: 'OPENING', amount, reference_type: null, reference_id: null,
+    shift_id: null, note, user_id: user_id ?? null, date: today(), created_at: now(),
+  });
+  addAuditLog({ action: 'OPENING_BALANCE_ADD', entity: 'cashbox', entity_id: null,
+    after_data: JSON.stringify({ amount, note }) });
+  persistStore();
+  return true;
 }
 
 export function getProductCategories(): string[] {
