@@ -1,3 +1,5 @@
+packages: []
+
 allowBuilds:
   protobufjs: true
   react-native-elements: true
