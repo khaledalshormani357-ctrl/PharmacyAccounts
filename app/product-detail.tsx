@@ -5,15 +5,15 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
-import { useRouter, useLocalSearchParams } from 'expo-router';
-import { useFocusEffect } from 'expo-router';
+import { useRouter, useLocalSearchParams , useFocusEffect } from 'expo-router';
 import { useTheme } from '@/contexts/ThemeContext';
 import {
-  getProduct, getBatches, getStockMovements, getProductAlternatives,
-  adjustStock, Product, Batch, StockMovement,
+  getProduct, getBatches, getProductUnits, getStockMovements, getProductAlternatives,
+  canEditOpeningStock, updateOpeningStock, adjustStock, Product, Batch, StockMovement,
 } from '@/services/database';
-import { formatCurrency, formatDate, daysFromToday, expiryLabel, AR } from '@/constants/i18n';
+import { formatCurrency, formatDate, daysFromToday, expiryLabel } from '@/constants/i18n';
 import { useAlert } from '@/template';
+import { decomposeBaseQuantity } from '@/services/unit-conversion';
 
 export default function ProductDetailScreen() {
   const { theme } = useTheme();
@@ -31,6 +31,11 @@ export default function ProductDetailScreen() {
   const [adjustBatch, setAdjustBatch] = useState<Batch | null>(null);
   const [adjustQty, setAdjustQty] = useState('');
   const [adjustNote, setAdjustNote] = useState('');
+  const [openingEditBatch, setOpeningEditBatch] = useState<Batch | null>(null);
+  const [openingEditQuantity, setOpeningEditQuantity] = useState('');
+  const [openingEditCost, setOpeningEditCost] = useState('');
+  const [openingEditBatchNumber, setOpeningEditBatchNumber] = useState('');
+  const [openingEditExpiry, setOpeningEditExpiry] = useState('');
 
   const load = useCallback(() => {
     if (!id) return;
@@ -63,12 +68,37 @@ export default function ProductDetailScreen() {
     showAlert('تم', 'تم تعديل المخزون');
   };
 
+  const openOpeningEditor = (batch: Batch) => {
+    setOpeningEditBatch(batch);
+    setOpeningEditQuantity(String(batch.quantity));
+    setOpeningEditCost(String(batch.purchase_price));
+    setOpeningEditBatchNumber(batch.batch_number);
+    setOpeningEditExpiry(batch.expiry_date || '');
+  };
+
+  const saveOpeningEdit = () => {
+    if (!openingEditBatch) return;
+    const result = updateOpeningStock({ batch_id: openingEditBatch.id, base_quantity: Number(openingEditQuantity),
+      unit_cost_per_base: Number(openingEditCost), batch_number: openingEditBatchNumber, expiry_date: openingEditExpiry });
+    if (!result.success) { showAlert('تعذر تعديل الافتتاح', result.error); return; }
+    setOpeningEditBatch(null);
+    load();
+    showAlert('تم', 'تم تحديث الرصيد الافتتاحي وتسجيل التعديل في سجل التدقيق.');
+  };
+
   if (!product) {
     return <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}><Text>جار التحميل...</Text></View>;
   }
 
+  const stockUnits = getProductUnits(product.id);
+  const stockUnitDefinitions = stockUnits.some(unit => unit.unit_name === product.inventory_unit)
+    ? stockUnits
+    : [{ id: -1, product_id: product.id, unit_name: product.inventory_unit, conversion_factor: 1,
+        sale_price: null, purchase_price: null, is_purchase_default: true, is_sale_default: true }, ...stockUnits];
+  const stockBreakdown = decomposeBaseQuantity(totalStock, product.inventory_unit, stockUnitDefinitions);
+
   const movementTypeLabel = (t: string) => {
-    const map: Record<string, string> = { PURCHASE: 'شراء', SALE: 'بيع', SALE_RETURN: 'مرتجع بيع', ADJUSTMENT_IN: 'إضافة', ADJUSTMENT_OUT: 'خصم', OPENING: 'رصيد افتتاحي', DAMAGE: 'تالف', EXPIRED: 'منتهي' };
+    const map: Record<string, string> = { PURCHASE: 'شراء', PURCHASE_RETURN: 'مرتجع شراء', SALE: 'بيع', SALE_RETURN: 'مرتجع بيع', ADJUSTMENT_IN: 'إضافة', ADJUSTMENT_OUT: 'خصم', OPENING: 'رصيد افتتاحي', DAMAGE: 'تالف', EXPIRED: 'منتهي' };
     return map[t] || t;
   };
 
@@ -91,8 +121,9 @@ export default function ProductDetailScreen() {
         <View style={{ backgroundColor: 'rgba(0,0,0,0.15)', borderRadius: 12, padding: 12, flexDirection: 'row', justifyContent: 'space-around' }}>
           <View style={{ alignItems: 'center' }}>
             <Text style={{ fontSize: 11, color: 'rgba(255,255,255,0.7)' }}>الرصيد</Text>
-            <Text style={{ fontSize: 22, fontWeight: '800', color: totalStock > 0 ? '#AAFFCC' : '#FFAAAA' }}>{totalStock}</Text>
+            <Text style={{ fontSize: 18, fontWeight: '800', color: totalStock > 0 ? '#AAFFCC' : '#FFAAAA' }}>{totalStock}</Text>
             <Text style={{ fontSize: 11, color: 'rgba(255,255,255,0.7)' }}>{product.inventory_unit}</Text>
+            <Text style={{ fontSize: 10, color: '#FFFFFF', textAlign: 'center', marginTop: 2 }}>{stockBreakdown.map(part => `${part.quantity} ${part.unit}`).join(' + ')}</Text>
           </View>
           <View style={{ width: 1, backgroundColor: 'rgba(255,255,255,0.2)' }} />
           <View style={{ alignItems: 'center' }}>
@@ -169,7 +200,7 @@ export default function ProductDetailScreen() {
               </View>
             ) : (
               batches.map(batch => {
-                const days = daysFromToday(batch.expiry_date);
+                const days = batch.expiry_date ? daysFromToday(batch.expiry_date) : 999999;
                 const batchColor = days <= 0 ? theme.colors.statusExpired : days <= 30 ? theme.colors.statusExpiring : days <= 90 ? theme.colors.warning : theme.colors.statusOk;
                 return (
                   <View key={batch.id} style={{ marginHorizontal: 14, marginBottom: 10, backgroundColor: theme.colors.surface, borderRadius: 10, borderWidth: 1, borderColor: theme.colors.border, padding: 12 }}>
@@ -177,7 +208,7 @@ export default function ProductDetailScreen() {
                       <View style={{ backgroundColor: batchColor + '18', borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3 }}>
                         <Text style={{ fontSize: 11, fontWeight: '600', color: batchColor }}>{expiryLabel(days)}</Text>
                       </View>
-                      <Text style={{ fontSize: 13, fontWeight: '700', color: theme.colors.textPrimary }}>دفعة: {batch.batch_number}</Text>
+                      <Text style={{ fontSize: 13, fontWeight: '700', color: theme.colors.textPrimary }}>{batch.is_opening ? 'الرصيد الافتتاحي' : `دفعة: ${batch.batch_number}`}</Text>
                     </View>
                     <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
                       <View style={{ alignItems: 'flex-start' }}>
@@ -185,18 +216,23 @@ export default function ProductDetailScreen() {
                         <Text style={{ fontSize: 16, fontWeight: '700', color: batch.quantity > 0 ? theme.colors.textPrimary : theme.colors.error }}>{batch.quantity} {product.inventory_unit}</Text>
                       </View>
                       <View style={{ alignItems: 'center' }}>
-                        <Text style={{ fontSize: 11, color: theme.colors.textTertiary }}>سعر الشراء</Text>
+                        <Text style={{ fontSize: 11, color: theme.colors.textTertiary }}>تكلفة الوحدة الأساسية</Text>
                         <Text style={{ fontSize: 13, fontWeight: '600', color: theme.colors.textPrimary }}>{formatCurrency(batch.purchase_price)}</Text>
                       </View>
                       <View style={{ alignItems: 'flex-end' }}>
                         <Text style={{ fontSize: 11, color: theme.colors.textTertiary }}>تاريخ الانتهاء</Text>
-                        <Text style={{ fontSize: 13, fontWeight: '600', color: batchColor }}>{formatDate(batch.expiry_date)}</Text>
+                        <Text style={{ fontSize: 13, fontWeight: '600', color: batchColor }}>{batch.expiry_date ? formatDate(batch.expiry_date) : 'غير محدد'}</Text>
                       </View>
                     </View>
                     <TouchableOpacity onPress={() => { setAdjustBatch(batch); setShowAdjust(true); }} style={{ marginTop: 10, alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: theme.colors.surfaceAlt, borderRadius: 6, paddingHorizontal: 10, paddingVertical: 5 }}>
                       <MaterialIcons name="edit" size={14} color={theme.colors.textSecondary} />
                       <Text style={{ fontSize: 12, color: theme.colors.textSecondary }}>تعديل</Text>
                     </TouchableOpacity>
+                    {batch.is_opening && canEditOpeningStock(batch.id) && (
+                      <TouchableOpacity onPress={() => openOpeningEditor(batch)} style={{ marginTop: 7, alignSelf: 'flex-start', backgroundColor: theme.colors.successLight, borderRadius: 6, paddingHorizontal: 10, paddingVertical: 6 }}>
+                        <Text style={{ fontSize: 11, color: theme.colors.success, fontWeight: '700' }}>تعديل بيانات الرصيد الافتتاحي</Text>
+                      </TouchableOpacity>
+                    )}
                   </View>
                 );
               })
@@ -288,6 +324,22 @@ export default function ProductDetailScreen() {
               <TouchableOpacity onPress={handleAdjust} style={{ flex: 2, height: 48, backgroundColor: '#00B8D9', borderRadius: 10, alignItems: 'center', justifyContent: 'center' }}>
                 <Text style={{ color: '#FFFFFF', fontWeight: '700' }}>تطبيق التعديل</Text>
               </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+      <Modal visible={!!openingEditBatch} animationType="slide" transparent onRequestClose={() => setOpeningEditBatch(null)}>
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' }}>
+          <View style={{ backgroundColor: theme.colors.surface, borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20, paddingBottom: insets.bottom + 20 }}>
+            <Text style={{ fontSize: 16, fontWeight: '700', color: theme.colors.textPrimary, textAlign: 'right', marginBottom: 6 }}>تعديل الرصيد الافتتاحي</Text>
+            <Text style={{ fontSize: 11, color: theme.colors.textTertiary, textAlign: 'right', marginBottom: 12 }}>يسمح بالتعديل المباشر قبل أي حركة أخرى فقط. الكمية والتكلفة بوحدة الأساس ({product.inventory_unit}).</Text>
+            <TextInput value={openingEditQuantity} onChangeText={setOpeningEditQuantity} keyboardType="decimal-pad" placeholder="كمية بوحدة الأساس" placeholderTextColor={theme.colors.textTertiary} style={{ height: 46, borderWidth: 1, borderColor: theme.colors.border, borderRadius: 9, paddingHorizontal: 12, textAlign: 'center', fontSize: 15, color: theme.colors.textPrimary, marginBottom: 8 }} />
+            <TextInput value={openingEditCost} onChangeText={setOpeningEditCost} keyboardType="decimal-pad" placeholder="تكلفة الوحدة الأساسية" placeholderTextColor={theme.colors.textTertiary} style={{ height: 46, borderWidth: 1, borderColor: theme.colors.border, borderRadius: 9, paddingHorizontal: 12, textAlign: 'center', fontSize: 15, color: theme.colors.textPrimary, marginBottom: 8 }} />
+            <TextInput value={openingEditBatchNumber} onChangeText={setOpeningEditBatchNumber} placeholder="رقم التشغيلة (اختياري)" placeholderTextColor={theme.colors.textTertiary} style={{ height: 46, borderWidth: 1, borderColor: theme.colors.border, borderRadius: 9, paddingHorizontal: 12, textAlign: 'right', fontSize: 14, color: theme.colors.textPrimary, marginBottom: 8 }} />
+            <TextInput value={openingEditExpiry} onChangeText={setOpeningEditExpiry} placeholder="الانتهاء YYYY-MM-DD (اختياري)" placeholderTextColor={theme.colors.textTertiary} style={{ height: 46, borderWidth: 1, borderColor: theme.colors.border, borderRadius: 9, paddingHorizontal: 12, textAlign: 'center', fontSize: 14, color: theme.colors.textPrimary, marginBottom: 14 }} />
+            <View style={{ flexDirection: 'row', gap: 10 }}>
+              <TouchableOpacity onPress={() => setOpeningEditBatch(null)} style={{ flex: 1, height: 46, borderRadius: 9, backgroundColor: theme.colors.surfaceAlt, alignItems: 'center', justifyContent: 'center' }}><Text style={{ color: theme.colors.textPrimary, fontWeight: '600' }}>إلغاء</Text></TouchableOpacity>
+              <TouchableOpacity onPress={saveOpeningEdit} style={{ flex: 2, height: 46, borderRadius: 9, backgroundColor: theme.colors.success, alignItems: 'center', justifyContent: 'center' }}><Text style={{ color: '#FFFFFF', fontWeight: '700' }}>حفظ التعديل</Text></TouchableOpacity>
             </View>
           </View>
         </View>

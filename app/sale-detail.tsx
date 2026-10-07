@@ -1,13 +1,12 @@
 // Smart Pharmacy ERP — Sale Detail
 import React, { useState, useCallback } from 'react';
-import { View, Text, ScrollView, TouchableOpacity } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, Modal, TextInput } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
-import { useRouter, useLocalSearchParams } from 'expo-router';
-import { useFocusEffect } from 'expo-router';
+import { useRouter, useLocalSearchParams , useFocusEffect } from 'expo-router';
 import { useTheme } from '@/contexts/ThemeContext';
-import { getSale, getSaleItems, cancelSale, getSetting, Sale, SaleItem } from '@/services/database';
-import { formatCurrency, formatDate, formatDateTime, AR } from '@/constants/i18n';
+import { getSale, getSaleItems, cancelSale, createSaleReturn, getSaleItemReturnableQuantity, getSaleReturns, getSetting, Sale, SaleItem, SaleReturn } from '@/services/database';
+import { formatCurrency, formatDateTime } from '@/constants/i18n';
 import { useAlert } from '@/template';
 import { PdfActions } from '@/components/PdfActions';
 import { buildInvoiceHtml } from '@/services/pdfReport';
@@ -20,12 +19,16 @@ export default function SaleDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const [sale, setSale] = useState<Sale | null>(null);
   const [items, setItems] = useState<SaleItem[]>([]);
+  const [returns, setReturns] = useState<SaleReturn[]>([]);
+  const [returnTarget, setReturnTarget] = useState<SaleItem | null>(null);
+  const [returnQuantity, setReturnQuantity] = useState('');
 
   const load = useCallback(() => {
     if (!id) return;
     const sid = parseInt(id);
     setSale(getSale(sid));
     setItems(getSaleItems(sid));
+    setReturns(getSaleReturns(sid));
   }, [id]);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
@@ -34,6 +37,7 @@ export default function SaleDetailScreen() {
 
   const typeColor = sale.sale_type === 'cash' ? theme.colors.income : theme.colors.credit;
   const typeLabel = sale.sale_type === 'cash' ? 'نقدي' : 'آجل';
+  const remainingAfterReturns = Math.max(0, sale.remaining - returns.reduce((sum, entry) => sum + entry.credit_reduction, 0));
   const buildInvoicePdf = () => buildInvoiceHtml({
     pharmacyName: getSetting('pharmacy_name') || 'صيدليتي',
     kind: 'sale',
@@ -49,24 +53,38 @@ export default function SaleDetailScreen() {
     amountPaid: sale.amount_paid,
     remaining: sale.remaining,
     changeGiven: sale.change_given,
-    grossProfit: sale.gross_profit,
     notes: sale.notes,
     items: items.map(item => ({
       name: item.product_name,
       quantity: item.quantity,
-      unit: item.unit,
+      unit: item.unit_name || item.unit,
       unitPrice: item.unit_price,
       discount: item.discount,
       total: item.line_total,
     })),
   });
+  const submitReturn = () => {
+    if (!returnTarget) return;
+    const quantity = Number(returnQuantity);
+    const remaining = getSaleItemReturnableQuantity(returnTarget.id);
+    if (!Number.isFinite(quantity) || quantity <= 0 || quantity > remaining) {
+      showAlert('كمية غير صحيحة', `أدخل كمية أكبر من صفر ولا تتجاوز ${remaining} ${returnTarget.unit_name || returnTarget.unit}.`);
+      return;
+    }
+    const result = createSaleReturn({ sale_id: sale.id, items: [{ sale_item_id: returnTarget.id, quantity }] });
+    if (!result.success) { showAlert('تعذر تسجيل المرتجع', result.error); return; }
+    setReturnTarget(null);
+    setReturnQuantity('');
+    load();
+    showAlert('تم تسجيل المرتجع', `تم إرجاع ${quantity} ${returnTarget.unit_name || returnTarget.unit} إلى دفعات البيع الأصلية.`);
+  };
 
   return (
     <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
       <View style={{ backgroundColor: typeColor, paddingTop: insets.top + 10, paddingBottom: 16, paddingHorizontal: 14 }}>
         <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
           <View style={{ flexDirection: 'row', gap: 8 }}>
-            {!sale.cancelled && (
+            {!sale.cancelled && returns.length === 0 && (
               <TouchableOpacity
                 onPress={() => showAlert('إلغاء الفاتورة', 'هل تريد إلغاء هذه الفاتورة؟', [
                   { text: 'لا', style: 'cancel' },
@@ -89,6 +107,11 @@ export default function SaleDetailScreen() {
           <View style={{ backgroundColor: theme.colors.error, borderRadius: 8, padding: 8, marginBottom: 10, alignItems: 'center' }}>
             <Text style={{ color: '#FFFFFF', fontSize: 13, fontWeight: '700' }}>⚠️ هذه الفاتورة ملغاة</Text>
             {sale.cancel_reason ? <Text style={{ color: 'rgba(255,255,255,0.8)', fontSize: 11, marginTop: 2 }}>السبب: {sale.cancel_reason}</Text> : null}
+          </View>
+        )}
+        {returns.length > 0 && (
+          <View style={{ backgroundColor: 'rgba(255,255,255,0.14)', borderRadius: 8, padding: 8, marginBottom: 10 }}>
+            <Text style={{ color: '#FFFFFF', fontSize: 12, fontWeight: '700', textAlign: 'right' }}>مرتجعات مسجلة: {returns.length} — {formatCurrency(returns.reduce((sum, entry) => sum + entry.total, 0))}</Text>
           </View>
         )}
 
@@ -116,12 +139,12 @@ export default function SaleDetailScreen() {
                 </View>
               </>
             )}
-            {sale.remaining > 0 && (
+            {remainingAfterReturns > 0 && (
               <>
                 <View style={{ width: 1, backgroundColor: 'rgba(255,255,255,0.2)' }} />
                 <View style={{ alignItems: 'center' }}>
                   <Text style={{ fontSize: 10, color: 'rgba(255,255,255,0.7)' }}>المتبقي</Text>
-                  <Text style={{ fontSize: 16, fontWeight: '700', color: '#FFAAAA' }}>{formatCurrency(sale.remaining)}</Text>
+                  <Text style={{ fontSize: 16, fontWeight: '700', color: '#FFAAAA' }}>{formatCurrency(remainingAfterReturns)}</Text>
                 </View>
               </>
             )}
@@ -147,6 +170,11 @@ export default function SaleDetailScreen() {
                 </Text>
                 <Text style={{ fontSize: 11, color: theme.colors.success }}>تكلفة: {formatCurrency(item.cogs)}</Text>
               </View>
+              {!sale.cancelled && getSaleItemReturnableQuantity(item.id) > 0 && (
+                <TouchableOpacity onPress={() => { setReturnTarget(item); setReturnQuantity(''); }} style={{ alignSelf: 'flex-start', marginTop: 9, backgroundColor: theme.colors.warningLight, borderRadius: 7, paddingHorizontal: 10, paddingVertical: 6 }}>
+                  <Text style={{ fontSize: 11, fontWeight: '700', color: theme.colors.warning }}>مرتجع — المتاح {getSaleItemReturnableQuantity(item.id)} {item.unit_name || item.unit}</Text>
+                </TouchableOpacity>
+              )}
             </View>
           ))}
         </View>
@@ -159,7 +187,7 @@ export default function SaleDetailScreen() {
             { label: 'الإجمالي', value: sale.total, bold: true },
             { label: 'المدفوع', value: sale.amount_paid },
             sale.change_given > 0 ? { label: 'الباقي للعميل', value: sale.change_given } : null,
-            sale.remaining > 0 ? { label: 'متبقي على العميل', value: sale.remaining } : null,
+            remainingAfterReturns > 0 ? { label: 'متبقي على العميل بعد المرتجعات', value: remainingAfterReturns } : null,
             sale.cogs > 0 ? { label: 'تكلفة البضاعة', value: sale.cogs } : null,
             sale.gross_profit > 0 ? { label: 'إجمالي الربح', value: sale.gross_profit, highlight: true } : null,
           ].filter(Boolean).map((row: any, i) => (
@@ -179,6 +207,21 @@ export default function SaleDetailScreen() {
           </View>
         ) : null}
       </ScrollView>
+
+      <Modal visible={!!returnTarget} animationType="slide" transparent onRequestClose={() => setReturnTarget(null)}>
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'flex-end' }}>
+          <View style={{ backgroundColor: theme.colors.surface, borderTopLeftRadius: 18, borderTopRightRadius: 18, padding: 18, paddingBottom: insets.bottom + 18 }}>
+            <Text style={{ fontSize: 16, fontWeight: '700', color: theme.colors.textPrimary, textAlign: 'right', marginBottom: 6 }}>مرتجع بيع جزئي</Text>
+            <Text style={{ fontSize: 12, color: theme.colors.textSecondary, textAlign: 'right', marginBottom: 12 }}>{returnTarget?.product_name} — {returnTarget?.unit_name || returnTarget?.unit} (معامل التحويل التاريخي: {returnTarget?.conversion_factor ?? 1})</Text>
+            <Text style={{ fontSize: 12, color: theme.colors.textSecondary, textAlign: 'right', marginBottom: 5 }}>الكمية المرتجعة</Text>
+            <TextInput value={returnQuantity} onChangeText={setReturnQuantity} keyboardType="decimal-pad" placeholder={`المتاح: ${returnTarget ? getSaleItemReturnableQuantity(returnTarget.id) : 0}`} placeholderTextColor={theme.colors.textTertiary} style={{ height: 48, borderWidth: 1, borderColor: theme.colors.border, borderRadius: 9, paddingHorizontal: 12, textAlign: 'center', fontSize: 17, color: theme.colors.textPrimary, marginBottom: 14 }} />
+            <View style={{ flexDirection: 'row', gap: 10 }}>
+              <TouchableOpacity onPress={() => setReturnTarget(null)} style={{ flex: 1, height: 46, borderRadius: 9, backgroundColor: theme.colors.surfaceAlt, alignItems: 'center', justifyContent: 'center' }}><Text style={{ color: theme.colors.textPrimary, fontWeight: '600' }}>إلغاء</Text></TouchableOpacity>
+              <TouchableOpacity onPress={submitReturn} style={{ flex: 2, height: 46, borderRadius: 9, backgroundColor: theme.colors.warning, alignItems: 'center', justifyContent: 'center' }}><Text style={{ color: '#FFFFFF', fontWeight: '700' }}>تأكيد المرتجع</Text></TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }

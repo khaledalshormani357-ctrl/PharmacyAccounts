@@ -1,5 +1,5 @@
 // Smart Pharmacy ERP — Add Purchase (Invoice)
-import React, { useState, useCallback } from 'react';
+import React, { useState } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, ScrollView,
   Modal, FlatList, KeyboardAvoidingView, Platform, ActivityIndicator,
@@ -8,9 +8,10 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useTheme } from '@/contexts/ThemeContext';
-import { createPurchase, getSuppliers, getProducts, getSetting, Supplier, Product } from '@/services/database';
-import { formatCurrency, getToday, AR } from '@/constants/i18n';
+import { createPurchase, getProductUnits, getSuppliers, getProducts, getSetting, getUnitPrice, Supplier, Product } from '@/services/database';
+import { formatCurrency, getToday } from '@/constants/i18n';
 import { useAlert } from '@/template';
+import { formatUnitEquivalents, isValidIsoDate, isValidUnitQuantity } from '@/services/unit-conversion';
 
 interface PurchaseLineItem {
   product: Product;
@@ -50,26 +51,26 @@ export default function AddPurchaseScreen() {
 
   const subtotal = items.reduce((s, i) => {
     const qty = parseFloat(i.quantity) || 0;
-    const freeQty = parseFloat(i.free_quantity) || 0;
     const price = parseFloat(i.purchase_price) || 0;
     const disc = parseFloat(i.discount) || 0;
-    return s + ((qty + freeQty) * price - disc);
+    return s + (qty * price - disc);
   }, 0);
   const invoiceDiscountNum = parseFloat(invoiceDiscount) || 0;
   const total = Math.max(0, subtotal - invoiceDiscountNum);
-  const amountPaidNum = parseFloat(amountPaid) || 0;
+  const amountPaidNum = amountPaid.trim() === '' ? 0 : Number(amountPaid);
   const remaining = Math.max(0, total - amountPaidNum);
 
   const addItem = (product: Product) => {
     setShowProductSearch(false);
     setProductSearch('');
+    const defaultUnit = getProductUnits(product.id).find(unit => unit.is_purchase_default)?.unit_name || product.inventory_unit;
     setItems(prev => [{
       product,
       batch_number: '',
       expiry_date: '',
-      unit: product.inventory_unit,
+      unit: defaultUnit,
       quantity: '1',
-      purchase_price: String(product.default_purchase_price || 0),
+      purchase_price: String(getUnitPrice(product.id, defaultUnit, 'purchase') ?? product.default_purchase_price ?? 0),
       free_quantity: '0',
       discount: '0',
     }, ...prev]);
@@ -81,12 +82,37 @@ export default function AddPurchaseScreen() {
     setItems(updated);
   };
 
+  const selectPurchaseUnit = (index: number, unit: string) => {
+    const item = items[index];
+    const price = getUnitPrice(item.product.id, unit, 'purchase');
+    const updated = [...items];
+    updated[index] = { ...item, unit, purchase_price: String(price ?? item.product.default_purchase_price) };
+    setItems(updated);
+  };
+
+  const unitChoices = (product: Product) => {
+    const configured = getProductUnits(product.id);
+    return configured.some(unit => unit.unit_name === product.inventory_unit)
+      ? configured
+      : [{ id: -1, product_id: product.id, unit_name: product.inventory_unit, conversion_factor: 1,
+          sale_price: null, purchase_price: null, is_purchase_default: true, is_sale_default: true }, ...configured];
+  };
+  const purchasePreview = (item: PurchaseLineItem) => {
+    const entered = (Number(item.quantity) || 0) + (Number(item.free_quantity) || 0);
+    return formatUnitEquivalents(entered, item.unit, item.product.inventory_unit, unitChoices(item.product));
+  };
+
   const handleSave = async () => {
     if (items.length === 0) { showAlert('تنبيه', 'أضف صنفاً واحداً على الأقل'); return; }
+    if (!isValidIsoDate(date)) { showAlert('تاريخ غير صحيح', 'أدخل تاريخ فاتورة بصيغة YYYY-MM-DD صحيحة.'); return; }
     for (const item of items) {
       if (!item.batch_number.trim()) { showAlert('تنبيه', `أدخل رقم دفعة ${item.product.trade_name}`); return; }
-      if (!item.expiry_date.trim()) { showAlert('تنبيه', `أدخل تاريخ انتهاء ${item.product.trade_name}`); return; }
+      if (!isValidIsoDate(item.expiry_date) || item.expiry_date < date) { showAlert('تاريخ انتهاء غير صحيح', `أدخل تاريخًا صالحًا لا يسبق تاريخ شراء ${item.product.trade_name}.`); return; }
+      if (!isValidUnitQuantity(Number(item.quantity), item.unit) || !isValidUnitQuantity(Number(item.free_quantity), item.unit, true)) { showAlert('كمية غير صحيحة', `تحقق من كمية ${item.product.trade_name} والكمية المجانية. الوحدات العددية لا تقبل الكسور.`); return; }
+      if (!Number.isFinite(Number(item.purchase_price)) || Number(item.purchase_price) < 0 || !Number.isFinite(Number(item.discount)) || Number(item.discount) < 0 || Number(item.discount) > Number(item.quantity) * Number(item.purchase_price)) { showAlert('سعر غير صحيح', `تحقق من السعر والخصم للصنف ${item.product.trade_name}.`); return; }
     }
+    if (!Number.isFinite(invoiceDiscountNum) || invoiceDiscountNum < 0 || invoiceDiscountNum > subtotal) { showAlert('خصم غير صحيح', 'خصم الفاتورة يجب ألا يتجاوز مجموع الأصناف.'); return; }
+    if (!Number.isFinite(amountPaidNum) || amountPaidNum < 0 || amountPaidNum > total) { showAlert('مبلغ غير صحيح', 'المبلغ المدفوع يجب أن يكون بين صفر وإجمالي الفاتورة.'); return; }
 
     setSaving(true);
     try {
@@ -99,10 +125,10 @@ export default function AddPurchaseScreen() {
           batch_number: i.batch_number,
           expiry_date: i.expiry_date,
           unit: i.unit,
-          quantity: parseFloat(i.quantity) || 1,
-          purchase_price: parseFloat(i.purchase_price) || 0,
-          free_quantity: parseFloat(i.free_quantity) || 0,
-          discount: parseFloat(i.discount) || 0,
+          quantity: Number(i.quantity),
+          purchase_price: Number(i.purchase_price),
+          free_quantity: Number(i.free_quantity),
+          discount: Number(i.discount),
         })),
         discount: invoiceDiscountNum,
         amount_paid: amountPaidNum,
@@ -169,6 +195,15 @@ export default function AddPurchaseScreen() {
                   <Text style={{ fontSize: 14, fontWeight: '700', color: theme.colors.textPrimary, flex: 1, textAlign: 'right', marginLeft: 8 }} numberOfLines={1}>{item.product.trade_name}</Text>
                 </View>
 
+                <Text style={{ fontSize: 10, color: theme.colors.textTertiary, textAlign: 'right', marginBottom: 4 }}>وحدة الشراء (السعر لكل وحدة مختارة)</Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 6, flexDirection: 'row', marginBottom: 8 }}>
+                  {unitChoices(item.product).map(unit => (
+                    <TouchableOpacity key={unit.id} onPress={() => selectPurchaseUnit(index, unit.unit_name)} style={{ paddingHorizontal: 10, paddingVertical: 5, borderRadius: 14, backgroundColor: item.unit === unit.unit_name ? '#6554C0' : theme.colors.surfaceAlt, borderWidth: 1, borderColor: item.unit === unit.unit_name ? '#6554C0' : theme.colors.border }}>
+                      <Text style={{ color: item.unit === unit.unit_name ? '#FFFFFF' : theme.colors.textSecondary, fontSize: 11 }}>{unit.unit_name} × {unit.conversion_factor}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+
                 <View style={{ flexDirection: 'row', gap: 8, marginBottom: 8 }}>
                   <View style={{ flex: 2 }}>
                     <Text style={{ fontSize: 10, color: theme.colors.textTertiary, textAlign: 'right', marginBottom: 3 }}>رقم الدفعة *</Text>
@@ -196,9 +231,13 @@ export default function AddPurchaseScreen() {
 
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 8 }}>
                   <Text style={{ fontSize: 13, fontWeight: '700', color: '#6554C0' }}>
-                    {formatCurrency(((parseFloat(item.quantity) || 0) + (parseFloat(item.free_quantity) || 0)) * (parseFloat(item.purchase_price) || 0) - (parseFloat(item.discount) || 0), currencySymbol)}
+                    {formatCurrency((parseFloat(item.quantity) || 0) * (parseFloat(item.purchase_price) || 0) - (parseFloat(item.discount) || 0), currencySymbol)}
                   </Text>
                   <Text style={{ fontSize: 11, color: theme.colors.textTertiary }}>المجموع</Text>
+                </View>
+                <View style={{ backgroundColor: theme.colors.surfaceAlt, borderRadius: 7, padding: 8, marginTop: 7 }}>
+                  <Text style={{ fontSize: 10, fontWeight: '700', color: theme.colors.primary, textAlign: 'right', marginBottom: 3 }}>الرصيد الأساسي الذي سيضاف (يشمل المجاني)</Text>
+                  {purchasePreview(item).map(equivalent => <Text key={equivalent.unit} style={{ fontSize: 11, color: theme.colors.textSecondary, textAlign: 'right' }}>{equivalent.quantity} {equivalent.unit}</Text>)}
                 </View>
               </View>
             ))

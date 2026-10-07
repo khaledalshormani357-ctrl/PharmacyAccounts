@@ -1,5 +1,5 @@
 // Smart Pharmacy ERP — POS (Point of Sale)
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, ScrollView,
   FlatList, Modal, KeyboardAvoidingView, Platform,
@@ -10,11 +10,12 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useTheme } from '@/contexts/ThemeContext';
 import {
-  getProducts, getCustomers, createSale, getProductUnits,
+  getProducts, getCustomers, createSale, getProductUnits, getUnitPrice,
   Product, Customer, getSetting, getProductStock,
 } from '@/services/database';
-import { formatCurrency, AR } from '@/constants/i18n';
+import { formatCurrency } from '@/constants/i18n';
 import { useAlert } from '@/template';
+import { formatUnitBreakdown, isValidUnitQuantity } from '@/services/unit-conversion';
 
 interface CartItem {
   product: Product;
@@ -24,7 +25,13 @@ interface CartItem {
   discount: string;
 }
 
-const unitOptions = (product: Product) => getProductUnits(product.id);
+const unitOptions = (product: Product) => {
+  const configured = getProductUnits(product.id);
+  return configured.some(unit => unit.unit_name === product.inventory_unit)
+    ? configured
+    : [{ id: -1, product_id: product.id, unit_name: product.inventory_unit, conversion_factor: 1,
+        sale_price: null, purchase_price: null, is_purchase_default: true, is_sale_default: true }, ...configured];
+};
 
 export default function PosScreen() {
   const { theme } = useTheme();
@@ -67,18 +74,19 @@ export default function PosScreen() {
     setShowSearch(false);
     setSearch('');
     setSearchResults([]);
-    const existing = cart.findIndex(i => i.product.id === product.id);
+    const defaultUnit = unitOptions(product).find(u => u.is_sale_default)?.unit_name || product.inventory_unit;
+    const existing = cart.findIndex(i => i.product.id === product.id && i.unit === defaultUnit);
     if (existing >= 0) {
       const updated = [...cart];
-      const current = parseInt(updated[existing].quantity) || 1;
+      const current = Number(updated[existing].quantity) || 0;
       updated[existing] = { ...updated[existing], quantity: String(current + 1) };
       setCart(updated);
     } else {
       setCart(prev => [{
         product,
         quantity: '1',
-        unit: product.inventory_unit,
-        unit_price: String(getProductUnits(product.id).find(u => u.is_sale_default)?.sale_price ?? product.selling_price),
+        unit: defaultUnit,
+        unit_price: String(getUnitPrice(product.id, defaultUnit, 'sale') ?? product.selling_price),
         discount: '0',
       }, ...prev]);
     }
@@ -91,9 +99,9 @@ export default function PosScreen() {
   };
 
   const selectUnit = (index: number, unit: string) => {
-    const definition = unitOptions(cart[index].product).find(u => u.unit_name === unit);
+    const price = getUnitPrice(cart[index].product.id, unit, 'sale');
     const updated = [...cart];
-    updated[index] = { ...updated[index], unit, unit_price: String(definition?.sale_price ?? updated[index].product.selling_price) };
+    updated[index] = { ...updated[index], unit, unit_price: String(price ?? updated[index].product.selling_price) };
     setCart(updated);
   };
 
@@ -110,13 +118,21 @@ export default function PosScreen() {
 
   const totalDiscount = parseFloat(invoiceDiscount) || 0;
   const total = Math.max(0, subtotal - totalDiscount);
-  const paid = parseFloat(amountPaid) || (saleType === 'cash' ? total : 0);
+  const paid = amountPaid.trim() === '' ? (saleType === 'cash' ? total : 0) : Number(amountPaid);
   const change = Math.max(0, paid - total);
   const remaining = Math.max(0, total - paid);
+  const stockBreakdown = (product: Product) => formatUnitBreakdown(getProductStock(product.id), product.inventory_unit, unitOptions(product));
+  const projectedBaseStock = (product: Product) => getProductStock(product.id) - cart
+    .filter(line => line.product.id === product.id)
+    .reduce((sum, line) => sum + (Number(line.quantity) || 0) * (unitOptions(product).find(unit => unit.unit_name === line.unit)?.conversion_factor || 1), 0);
 
   const handleSave = async () => {
     if (cart.length === 0) { showAlert('تنبيه', 'أضف صنفاً واحداً على الأقل'); return; }
     if (saleType === 'credit' && !selectedCustomer) { showAlert('تنبيه', 'اختر عميلاً للبيع الآجل'); return; }
+    if (cart.some(item => !Number.isFinite(Number(item.quantity)) || Number(item.quantity) <= 0 || !Number.isFinite(Number(item.unit_price)) || Number(item.unit_price) < 0 || !Number.isFinite(Number(item.discount)) || Number(item.discount) < 0)) { showAlert('تحقق من الفاتورة', 'تأكد من أن الكميات موجبة والأسعار والخصومات صحيحة.'); return; }
+    if (cart.some(item => !isValidUnitQuantity(Number(item.quantity), item.unit))) { showAlert('كمية غير صحيحة', 'الوحدات العددية مثل العلبة والحبة تقبل أعدادًا صحيحة؛ الكسور متاحة لوحدات الحجم والوزن.'); return; }
+    if (!Number.isFinite(totalDiscount) || totalDiscount < 0 || totalDiscount > subtotal) { showAlert('خصم غير صحيح', 'خصم الفاتورة يجب ألا يتجاوز مجموع الأصناف.'); return; }
+    if (!Number.isFinite(paid) || paid < 0) { showAlert('مبلغ غير صحيح', 'أدخل مبلغًا مدفوعًا صحيحًا غير سالب.'); return; }
 
     setSaving(true);
     try {
@@ -126,9 +142,9 @@ export default function PosScreen() {
         items: cart.map(item => ({
           product_id: item.product.id,
           unit: item.unit,
-          quantity: parseFloat(item.quantity) || 1,
-          unit_price: parseFloat(item.unit_price) || item.product.selling_price,
-          discount: parseFloat(item.discount) || 0,
+          quantity: Number(item.quantity),
+          unit_price: Number(item.unit_price),
+          discount: Number(item.discount),
         })),
         discount: totalDiscount,
         amount_paid: paid,
@@ -271,7 +287,7 @@ export default function PosScreen() {
                       <TextInput
                         value={item[f.field]}
                         onChangeText={v => updateCartItem(index, f.field, v)}
-                        keyboardType="numeric"
+                        keyboardType="decimal-pad"
                         style={{ height: 38, borderRadius: 8, borderWidth: 1, borderColor: theme.colors.border, paddingHorizontal: 8, textAlign: 'center', fontSize: 14, fontWeight: '600', color: theme.colors.textPrimary, backgroundColor: theme.colors.surfaceAlt }}
                       />
                     </View>
@@ -289,6 +305,17 @@ export default function PosScreen() {
                     </ScrollView>
                   </View>
                 )}
+                <View style={{ backgroundColor: theme.colors.surfaceAlt, borderRadius: 7, padding: 8, marginTop: 8 }}>
+                  <Text style={{ fontSize: 10, fontWeight: '700', color: theme.colors.primary, textAlign: 'right' }}>
+                    سيُخصم {(Number(item.quantity) || 0) * (unitOptions(item.product).find(unit => unit.unit_name === item.unit)?.conversion_factor || 1)} {item.product.inventory_unit} من الرصيد الأساسي
+                  </Text>
+                  <Text style={{ fontSize: 10, color: theme.colors.textTertiary, textAlign: 'right', marginTop: 3 }}>
+                    الرصيد قبل البيع: {stockBreakdown(item.product).join(' + ') || `0 ${item.product.inventory_unit}`}
+                  </Text>
+                  <Text style={{ fontSize: 10, color: projectedBaseStock(item.product) >= 0 ? theme.colors.success : theme.colors.error, textAlign: 'right', marginTop: 2 }}>
+                    الرصيد بعد السلة: {formatUnitBreakdown(Math.max(0, projectedBaseStock(item.product)), item.product.inventory_unit, unitOptions(item.product)).join(' + ')}
+                  </Text>
+                </View>
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 8 }}>
                   <Text style={{ fontSize: 13, fontWeight: '700', color: theme.colors.primary }}>
                     {formatCurrency((parseFloat(item.quantity) || 0) * (parseFloat(item.unit_price) || 0) - (parseFloat(item.discount) || 0), currencySymbol)}

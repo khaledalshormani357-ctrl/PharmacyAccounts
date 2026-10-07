@@ -6,13 +6,13 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
-import { useFocusEffect } from 'expo-router';
+import { useRouter , useFocusEffect } from 'expo-router';
 import { useTheme } from '@/contexts/ThemeContext';
-import { getInventoryList, getSetting, InventoryItem } from '@/services/database';
-import { formatCurrency, AR } from '@/constants/i18n';
+import { getInventoryList, getProductUnits, getSetting, InventoryItem } from '@/services/database';
+import { formatCurrency } from '@/constants/i18n';
 import { PdfActions } from '@/components/PdfActions';
 import { buildTableReportHtml } from '@/services/pdfReport';
+import { decomposeBaseQuantity } from '@/services/unit-conversion';
 
 const FILTERS = [
   { key: 'all', label: 'الكل', icon: 'inventory-2' },
@@ -36,6 +36,15 @@ function StatusBadge({ status, theme }: { status: InventoryItem['status']; theme
       <Text style={{ fontSize: 10, fontWeight: '600', color: config.color }}>{config.label}</Text>
     </View>
   );
+}
+
+function stockBreakdown(item: InventoryItem): string {
+  const configured = getProductUnits(item.product_id);
+  const units = configured.some(unit => unit.unit_name === item.inventory_unit)
+    ? configured
+    : [{ unit_name: item.inventory_unit, conversion_factor: 1 }, ...configured];
+  return decomposeBaseQuantity(item.total_quantity, item.inventory_unit, units)
+    .map(part => `${part.quantity} ${part.unit}`).join(' + ');
 }
 
 export default function InventoryScreen() {
@@ -139,6 +148,7 @@ export default function InventoryScreen() {
                       <Text style={{ fontSize: 12, fontWeight: '600', color: item.total_quantity > 0 ? theme.colors.textPrimary : theme.colors.error }}>
                         {item.total_quantity} {item.inventory_unit}
                       </Text>
+                      <Text style={{ fontSize: 10, color: theme.colors.textTertiary, textAlign: 'left' }}>{stockBreakdown(item)}</Text>
                     </View>
                   </View>
                   <View style={{ flex: 1, marginHorizontal: 10, alignItems: 'flex-end' }}>

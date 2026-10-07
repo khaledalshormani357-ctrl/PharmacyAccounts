@@ -8,7 +8,8 @@
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",
-    "lint": "expo lint"
+    "lint": "expo lint",
+    "test:units": "rm -rf .test-build && pnpm exec tsc -p tsconfig.unit-tests.json && node --test tests/pharmacy-units.test.cjs; result=$?; rm -rf .test-build; exit $result"
   },
   "dependencies": {
     "@expo/metro-runtime": "5.0.4",

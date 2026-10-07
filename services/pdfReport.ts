@@ -3,6 +3,7 @@ import { Platform } from 'react-native';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import { formatCurrency } from '@/constants/i18n';
+import { buildCustomerSaleInvoiceBody, CustomerInvoiceLine } from './customer-invoice';
 
 export interface PdfReportSummary {
   cashSales: number;
@@ -35,9 +36,8 @@ export interface PdfInvoiceLine {
   details?: string;
 }
 
-export interface PdfInvoiceData {
+interface PdfInvoiceCommon {
   pharmacyName: string;
-  kind: 'sale' | 'purchase';
   invoiceNumber: string;
   date: string;
   partyName?: string | null;
@@ -50,11 +50,22 @@ export interface PdfInvoiceData {
   total: number;
   amountPaid: number;
   remaining: number;
-  changeGiven?: number;
-  grossProfit?: number;
   notes?: string | null;
+}
+
+/** A customer-facing sale invoice has no confidential accounting fields by construction. */
+export interface PdfCustomerSaleInvoiceData extends PdfInvoiceCommon {
+  kind: 'sale';
+  changeGiven?: number;
+  items: CustomerInvoiceLine[];
+}
+
+export interface PdfPurchaseInvoiceData extends PdfInvoiceCommon {
+  kind: 'purchase';
   items: PdfInvoiceLine[];
 }
+
+export type PdfInvoiceData = PdfCustomerSaleInvoiceData | PdfPurchaseInvoiceData;
 
 export interface PdfAccountTransaction {
   date: string;
@@ -249,9 +260,34 @@ export function buildReportHtml(data: PdfReportData): string {
 }
 
 export function buildInvoiceHtml(data: PdfInvoiceData): string {
-  const isSale = data.kind === 'sale';
-  const title = isSale ? 'فاتورة مبيعات' : 'فاتورة مشتريات';
-  const partyLabel = data.partyLabel || (isSale ? 'العميل' : 'المورد');
+  if (data.kind === 'sale') {
+    return buildDocument({
+      pharmacyName: data.pharmacyName,
+      title: 'فاتورة مبيعات',
+      subtitle: `${data.invoiceNumber} · ${data.date}`,
+      accent: '#00875A',
+      body: buildCustomerSaleInvoiceBody({
+        pharmacyName: data.pharmacyName,
+        invoiceNumber: data.invoiceNumber,
+        date: data.date,
+        customerName: data.partyName,
+        paymentLabel: data.paymentLabel,
+        cancelled: data.cancelled,
+        cancelReason: data.cancelReason,
+        subtotal: data.subtotal,
+        discount: data.discount,
+        total: data.total,
+        amountPaid: data.amountPaid,
+        remaining: data.remaining,
+        changeGiven: data.changeGiven,
+        notes: data.notes,
+        items: data.items,
+      }, money),
+    });
+  }
+
+  const title = 'فاتورة مشتريات';
+  const partyLabel = data.partyLabel || 'المورد';
   const itemRows = data.items.length
     ? data.items.map((item, index) => `<tr>
         <td>${index + 1}</td>
@@ -263,17 +299,17 @@ export function buildInvoiceHtml(data: PdfInvoiceData): string {
       </tr>`).join('')
     : '<tr><td colspan="6" class="empty">لا توجد أصناف في الفاتورة</td></tr>';
 
-  const typeText = data.paymentLabel || (isSale ? 'بيع' : 'شراء');
+  const typeText = data.paymentLabel || 'شراء';
   return buildDocument({
     pharmacyName: data.pharmacyName,
     title,
     subtitle: `${data.invoiceNumber} · ${data.date}`,
-    accent: isSale ? '#00875A' : '#6554C0',
+    accent: '#6554C0',
     body: `
       ${data.cancelled ? `<div class="notice">هذه الفاتورة ملغاة${data.cancelReason ? ` — ${escapeHtml(data.cancelReason)}` : ''}</div>` : ''}
       <section class="section"><div class="section-title">بيانات الفاتورة</div><div class="summary-grid">
         <div class="metric"><div class="label">رقم الفاتورة</div><div class="value">${escapeHtml(data.invoiceNumber)}</div></div>
-        <div class="metric"><div class="label">${escapeHtml(partyLabel)}</div><div class="value">${escapeHtml(data.partyName || (isSale ? 'عميل نقدي' : 'مورد مباشر'))}</div></div>
+        <div class="metric"><div class="label">${escapeHtml(partyLabel)}</div><div class="value">${escapeHtml(data.partyName || 'مورد مباشر')}</div></div>
         <div class="metric"><div class="label">نوع العملية</div><div class="value">${escapeHtml(typeText)}</div></div>
       </div></section>
       <section class="section"><div class="section-title">الأصناف</div><table><thead><tr><th>#</th><th>الصنف</th><th>الكمية</th><th class="number">السعر</th><th class="number">الخصم</th><th class="number">الإجمالي</th></tr></thead><tbody>${itemRows}</tbody></table></section>
@@ -282,9 +318,7 @@ export function buildInvoiceHtml(data: PdfInvoiceData): string {
         ${data.discount > 0 ? `<tr><td>الخصم</td><td class="number negative">${money(data.discount)}</td></tr>` : ''}
         <tr class="total-row"><td>الإجمالي النهائي</td><td class="number">${money(data.total)}</td></tr>
         <tr><td>المدفوع</td><td class="number positive">${money(data.amountPaid)}</td></tr>
-        ${data.changeGiven && data.changeGiven > 0 ? `<tr><td>الباقي للعميل</td><td class="number">${money(data.changeGiven)}</td></tr>` : ''}
         ${data.remaining > 0 ? `<tr><td>المتبقي</td><td class="number negative">${money(data.remaining)}</td></tr>` : ''}
-        ${isSale && typeof data.grossProfit === 'number' ? `<tr><td>إجمالي الربح</td><td class="number ${data.grossProfit >= 0 ? 'positive' : 'negative'}">${money(data.grossProfit)}</td></tr>` : ''}
       </tbody></table></section>
       ${data.notes ? `<div class="note"><strong>ملاحظات:</strong> ${escapeHtml(data.notes)}</div>` : ''}
     `,
