@@ -11,8 +11,10 @@
     "types": []
   },
   "include": [
+    "services/atomic-store.ts",
     "services/unit-conversion.ts",
     "services/erp-database.ts",
-    "services/customer-invoice.ts"
+    "services/customer-invoice.ts",
+    "services/return-invoice.ts"
   ]
 }

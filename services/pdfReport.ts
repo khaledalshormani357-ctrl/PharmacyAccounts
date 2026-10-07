@@ -4,6 +4,7 @@ import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import { formatCurrency } from '@/constants/i18n';
 import { buildCustomerSaleInvoiceBody, CustomerInvoiceLine } from './customer-invoice';
+import { buildReturnInvoiceBody, ReturnInvoiceBodyData } from './return-invoice';
 
 export interface PdfReportSummary {
   cashSales: number;
@@ -66,6 +67,10 @@ export interface PdfPurchaseInvoiceData extends PdfInvoiceCommon {
 }
 
 export type PdfInvoiceData = PdfCustomerSaleInvoiceData | PdfPurchaseInvoiceData;
+
+export interface PdfReturnInvoiceData extends Omit<ReturnInvoiceBodyData, 'formatMoney'> {
+  pharmacyName: string;
+}
 
 export interface PdfAccountTransaction {
   date: string;
@@ -322,6 +327,17 @@ export function buildInvoiceHtml(data: PdfInvoiceData): string {
       </tbody></table></section>
       ${data.notes ? `<div class="note"><strong>ملاحظات:</strong> ${escapeHtml(data.notes)}</div>` : ''}
     `,
+  });
+}
+
+export function buildReturnInvoiceHtml(data: PdfReturnInvoiceData): string {
+  const sales = data.kind === 'sale';
+  return buildDocument({
+    pharmacyName: data.pharmacyName,
+    title: sales ? 'مرتجع مبيعات' : 'مرتجع مشتريات',
+    subtitle: `${data.returnNumber} · ${data.date}`,
+    accent: sales ? '#00875A' : '#6554C0',
+    body: buildReturnInvoiceBody({ ...data, formatMoney: money }),
   });
 }
 

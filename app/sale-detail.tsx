@@ -1,11 +1,11 @@
 // Smart Pharmacy ERP — Sale Detail
 import React, { useState, useCallback } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, Modal, TextInput } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams , useFocusEffect } from 'expo-router';
 import { useTheme } from '@/contexts/ThemeContext';
-import { getSale, getSaleItems, cancelSale, createSaleReturn, getSaleItemReturnableQuantity, getSaleReturns, getSetting, Sale, SaleItem, SaleReturn } from '@/services/database';
+import { getSale, getSaleItems, cancelSale, getSaleItemReturnableQuantity, getSaleItemReturnedQuantity, getSaleReturns, getSetting, Sale, SaleItem, SaleReturn } from '@/services/database';
 import { formatCurrency, formatDateTime } from '@/constants/i18n';
 import { useAlert } from '@/template';
 import { PdfActions } from '@/components/PdfActions';
@@ -20,8 +20,6 @@ export default function SaleDetailScreen() {
   const [sale, setSale] = useState<Sale | null>(null);
   const [items, setItems] = useState<SaleItem[]>([]);
   const [returns, setReturns] = useState<SaleReturn[]>([]);
-  const [returnTarget, setReturnTarget] = useState<SaleItem | null>(null);
-  const [returnQuantity, setReturnQuantity] = useState('');
 
   const load = useCallback(() => {
     if (!id) return;
@@ -63,21 +61,10 @@ export default function SaleDetailScreen() {
       total: item.line_total,
     })),
   });
-  const submitReturn = () => {
-    if (!returnTarget) return;
-    const quantity = Number(returnQuantity);
-    const remaining = getSaleItemReturnableQuantity(returnTarget.id);
-    if (!Number.isFinite(quantity) || quantity <= 0 || quantity > remaining) {
-      showAlert('كمية غير صحيحة', `أدخل كمية أكبر من صفر ولا تتجاوز ${remaining} ${returnTarget.unit_name || returnTarget.unit}.`);
-      return;
-    }
-    const result = createSaleReturn({ sale_id: sale.id, items: [{ sale_item_id: returnTarget.id, quantity }] });
-    if (!result.success) { showAlert('تعذر تسجيل المرتجع', result.error); return; }
-    setReturnTarget(null);
-    setReturnQuantity('');
-    load();
-    showAlert('تم تسجيل المرتجع', `تم إرجاع ${quantity} ${returnTarget.unit_name || returnTarget.unit} إلى دفعات البيع الأصلية.`);
-  };
+  const returnStatus = sale?.cancelled ? 'ملغاة'
+    : returns.length === 0 ? 'نشطة — بلا مرتجعات'
+      : items.some(item => getSaleItemReturnableQuantity(item.id) > 0) ? 'مرتجعة جزئيًا'
+        : 'مرتجعة بالكامل';
 
   return (
     <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
@@ -112,8 +99,10 @@ export default function SaleDetailScreen() {
         {returns.length > 0 && (
           <View style={{ backgroundColor: 'rgba(255,255,255,0.14)', borderRadius: 8, padding: 8, marginBottom: 10 }}>
             <Text style={{ color: '#FFFFFF', fontSize: 12, fontWeight: '700', textAlign: 'right' }}>مرتجعات مسجلة: {returns.length} — {formatCurrency(returns.reduce((sum, entry) => sum + entry.total, 0))}</Text>
+            <Text style={{ color: 'rgba(255,255,255,0.8)', fontSize: 10, textAlign: 'right', marginTop: 3 }}>حالة الفاتورة: {returnStatus} · الأصل لم يُعدّل</Text>
           </View>
         )}
+        {returns.length === 0 && <Text style={{ color: 'rgba(255,255,255,0.88)', textAlign: 'right', fontSize: 11, marginBottom: 8 }}>حالة الفاتورة: {returnStatus}</Text>}
 
         <View style={{ backgroundColor: 'rgba(0,0,0,0.15)', borderRadius: 12, padding: 12 }}>
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 }}>
@@ -171,8 +160,8 @@ export default function SaleDetailScreen() {
                 <Text style={{ fontSize: 11, color: theme.colors.success }}>تكلفة: {formatCurrency(item.cogs)}</Text>
               </View>
               {!sale.cancelled && getSaleItemReturnableQuantity(item.id) > 0 && (
-                <TouchableOpacity onPress={() => { setReturnTarget(item); setReturnQuantity(''); }} style={{ alignSelf: 'flex-start', marginTop: 9, backgroundColor: theme.colors.warningLight, borderRadius: 7, paddingHorizontal: 10, paddingVertical: 6 }}>
-                  <Text style={{ fontSize: 11, fontWeight: '700', color: theme.colors.warning }}>مرتجع — المتاح {getSaleItemReturnableQuantity(item.id)} {item.unit_name || item.unit}</Text>
+                <TouchableOpacity onPress={() => router.push({ pathname: '/new-return', params: { type: 'sale', invoiceId: String(sale.id) } } as any)} style={{ alignSelf: 'flex-start', marginTop: 9, backgroundColor: theme.colors.warningLight, borderRadius: 7, paddingHorizontal: 10, paddingVertical: 6 }}>
+                  <Text style={{ fontSize: 11, fontWeight: '700', color: theme.colors.warning }}>إنشاء مرتجع — الأصل {item.quantity} · سابقًا {getSaleItemReturnedQuantity(item.id)} · المتاح {getSaleItemReturnableQuantity(item.id)} {item.unit_name || item.unit}</Text>
                 </TouchableOpacity>
               )}
             </View>
@@ -208,20 +197,6 @@ export default function SaleDetailScreen() {
         ) : null}
       </ScrollView>
 
-      <Modal visible={!!returnTarget} animationType="slide" transparent onRequestClose={() => setReturnTarget(null)}>
-        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'flex-end' }}>
-          <View style={{ backgroundColor: theme.colors.surface, borderTopLeftRadius: 18, borderTopRightRadius: 18, padding: 18, paddingBottom: insets.bottom + 18 }}>
-            <Text style={{ fontSize: 16, fontWeight: '700', color: theme.colors.textPrimary, textAlign: 'right', marginBottom: 6 }}>مرتجع بيع جزئي</Text>
-            <Text style={{ fontSize: 12, color: theme.colors.textSecondary, textAlign: 'right', marginBottom: 12 }}>{returnTarget?.product_name} — {returnTarget?.unit_name || returnTarget?.unit} (معامل التحويل التاريخي: {returnTarget?.conversion_factor ?? 1})</Text>
-            <Text style={{ fontSize: 12, color: theme.colors.textSecondary, textAlign: 'right', marginBottom: 5 }}>الكمية المرتجعة</Text>
-            <TextInput value={returnQuantity} onChangeText={setReturnQuantity} keyboardType="decimal-pad" placeholder={`المتاح: ${returnTarget ? getSaleItemReturnableQuantity(returnTarget.id) : 0}`} placeholderTextColor={theme.colors.textTertiary} style={{ height: 48, borderWidth: 1, borderColor: theme.colors.border, borderRadius: 9, paddingHorizontal: 12, textAlign: 'center', fontSize: 17, color: theme.colors.textPrimary, marginBottom: 14 }} />
-            <View style={{ flexDirection: 'row', gap: 10 }}>
-              <TouchableOpacity onPress={() => setReturnTarget(null)} style={{ flex: 1, height: 46, borderRadius: 9, backgroundColor: theme.colors.surfaceAlt, alignItems: 'center', justifyContent: 'center' }}><Text style={{ color: theme.colors.textPrimary, fontWeight: '600' }}>إلغاء</Text></TouchableOpacity>
-              <TouchableOpacity onPress={submitReturn} style={{ flex: 2, height: 46, borderRadius: 9, backgroundColor: theme.colors.warning, alignItems: 'center', justifyContent: 'center' }}><Text style={{ color: '#FFFFFF', fontWeight: '700' }}>تأكيد المرتجع</Text></TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
     </View>
   );
 }

@@ -2,16 +2,14 @@
 import { AlertProvider } from '@/template';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { Stack } from 'expo-router';
-import { ThemeProvider, useTheme } from '@/contexts/ThemeContext';
+import { ThemeProvider } from '@/contexts/ThemeContext';
 import { useEffect, useState, useCallback } from 'react';
-import { Platform } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { databaseReady, getSetting } from '@/services/database';
 import { PinLock } from '@/components/ui';
 import { CloudAuthGate } from '@/components/CloudAuthGate';
 
 function AppShell() {
-  const { theme } = useTheme();
   const [pinChecked, setPinChecked] = useState(false);
   const [pinRequired, setPinRequired] = useState(false);
   const [pinCode, setPinCode] = useState('');
@@ -79,6 +77,9 @@ function AppShell() {
         <Stack.Screen name="users" options={{ headerShown: false }} />
         <Stack.Screen name="sale-detail" options={{ headerShown: false }} />
         <Stack.Screen name="purchase-detail" options={{ headerShown: false }} />
+        <Stack.Screen name="returns" options={{ headerShown: false }} />
+        <Stack.Screen name="new-return" options={{ headerShown: false }} />
+        <Stack.Screen name="return-detail" options={{ headerShown: false }} />
       </Stack>
     </>
   );

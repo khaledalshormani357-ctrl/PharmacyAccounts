@@ -2,12 +2,11 @@
 import React, { useState, useCallback } from 'react';
 import { View, Text, FlatList, TouchableOpacity, Modal, TextInput } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
-import { useFocusEffect } from 'expo-router';
+import { useRouter, useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '@/contexts/ThemeContext';
 import { getCashBalance, getCashTransactions, addCashDeposit, addCashWithdrawal, getSetting, CashTransaction } from '@/services/database';
-import { formatCurrency, formatDateTime } from '@/constants/i18n';
+import { formatCurrency } from '@/constants/i18n';
 import { useAlert } from '@/template';
 import { PdfActions } from '@/components/PdfActions';
 import { buildTableReportHtml } from '@/services/pdfReport';
@@ -15,6 +14,7 @@ import { buildTableReportHtml } from '@/services/pdfReport';
 const TX_TYPE_LABELS: Record<string, string> = {
   SALE_CASH: 'بيع نقدي', COLLECTION: 'تحصيل دين', PURCHASE_PAYMENT: 'دفع للمورد',
   SUPPLIER_PAYMENT: 'دفع للمورد', EXPENSE: 'مصروف', WITHDRAWAL: 'سحب',
+  CUSTOMER_REFUND: 'رد نقدي للعميل', PURCHASE_RETURN: 'استرداد نقدي من المورد',
   DEPOSIT: 'إيداع', OPENING: 'رصيد افتتاحي', CLOSING: 'إغلاق', ADJUSTMENT: 'تسوية',
 };
 

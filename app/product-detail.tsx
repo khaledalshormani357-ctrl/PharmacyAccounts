@@ -98,7 +98,7 @@ export default function ProductDetailScreen() {
   const stockBreakdown = decomposeBaseQuantity(totalStock, product.inventory_unit, stockUnitDefinitions);
 
   const movementTypeLabel = (t: string) => {
-    const map: Record<string, string> = { PURCHASE: 'شراء', PURCHASE_RETURN: 'مرتجع شراء', SALE: 'بيع', SALE_RETURN: 'مرتجع بيع', ADJUSTMENT_IN: 'إضافة', ADJUSTMENT_OUT: 'خصم', OPENING: 'رصيد افتتاحي', DAMAGE: 'تالف', EXPIRED: 'منتهي' };
+    const map: Record<string, string> = { PURCHASE: 'شراء', PURCHASE_RETURN: 'مرتجع شراء', SALE: 'بيع', SALE_RETURN: 'مرتجع بيع', ADJUSTMENT_IN: 'إضافة', ADJUSTMENT_OUT: 'خصم', OPENING: 'رصيد افتتاحي', DAMAGE: 'مرتجع تالف (محجور)', EXPIRED: 'منتهي' };
     return map[t] || t;
   };
 
@@ -108,7 +108,7 @@ export default function ProductDetailScreen() {
       <View style={{ backgroundColor: '#00B8D9', paddingTop: insets.top + 10, paddingBottom: 16, paddingHorizontal: 14 }}>
         <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
           <View style={{ flexDirection: 'row', gap: 8 }}>
-            <TouchableOpacity onPress={() => router.push({ pathname: '/add-product', params: { id: product.id } })} style={{ backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 5 }}>
+            <TouchableOpacity onPress={() => router.push({ pathname: '/add-product', params: { id: product.id } } as any)} style={{ backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 5 }}>
               <Text style={{ color: '#FFFFFF', fontSize: 12, fontWeight: '600' }}>تعديل</Text>
             </TouchableOpacity>
             <TouchableOpacity onPress={() => router.back()} style={{ width: 34, height: 34, backgroundColor: 'rgba(255,255,255,0.15)', borderRadius: 8, alignItems: 'center', justifyContent: 'center' }}>
@@ -214,6 +214,7 @@ export default function ProductDetailScreen() {
                       <View style={{ alignItems: 'flex-start' }}>
                         <Text style={{ fontSize: 11, color: theme.colors.textTertiary }}>الكمية</Text>
                         <Text style={{ fontSize: 16, fontWeight: '700', color: batch.quantity > 0 ? theme.colors.textPrimary : theme.colors.error }}>{batch.quantity} {product.inventory_unit}</Text>
+                        {(batch.quarantined_quantity ?? 0) > 0 && <Text style={{ fontSize: 11, fontWeight: '700', color: theme.colors.error, marginTop: 3 }}>محجور غير متاح للبيع: {batch.quarantined_quantity} {product.inventory_unit}</Text>}
                       </View>
                       <View style={{ alignItems: 'center' }}>
                         <Text style={{ fontSize: 11, color: theme.colors.textTertiary }}>تكلفة الوحدة الأساسية</Text>
@@ -250,8 +251,8 @@ export default function ProductDetailScreen() {
               movements.map(m => (
                 <View key={m.id} style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: theme.colors.divider, backgroundColor: theme.colors.surface }}>
                   <View style={{ alignItems: 'flex-start' }}>
-                    <Text style={{ fontSize: 14, fontWeight: '700', color: m.quantity > 0 ? theme.colors.success : theme.colors.error }}>
-                      {m.quantity > 0 ? '+' : ''}{m.quantity} {product.inventory_unit}
+                    <Text style={{ fontSize: 14, fontWeight: '700', color: m.type === 'DAMAGE' ? theme.colors.error : m.quantity > 0 ? theme.colors.success : theme.colors.error }}>
+                      {m.type === 'DAMAGE' ? `حجر +${m.quantity}` : `${m.quantity > 0 ? '+' : ''}${m.quantity} ${product.inventory_unit}`}
                     </Text>
                   </View>
                   <View style={{ flex: 1, marginHorizontal: 10, alignItems: 'flex-end' }}>
@@ -279,7 +280,7 @@ export default function ProductDetailScreen() {
                   </Text>
                 </View>
                 {alternatives.map(alt => (
-                  <TouchableOpacity key={alt.id} onPress={() => router.push({ pathname: '/product-detail', params: { id: alt.id } })} style={{ backgroundColor: theme.colors.surface, borderRadius: 10, borderWidth: 1, borderColor: theme.colors.border, padding: 12, marginBottom: 10 }}>
+                  <TouchableOpacity key={alt.id} onPress={() => router.push({ pathname: '/product-detail', params: { id: alt.id } } as any)} style={{ backgroundColor: theme.colors.surface, borderRadius: 10, borderWidth: 1, borderColor: theme.colors.border, padding: 12, marginBottom: 10 }}>
                     <Text style={{ fontSize: 14, fontWeight: '600', color: theme.colors.textPrimary, textAlign: 'right' }}>{alt.trade_name}</Text>
                     {alt.strength && <Text style={{ fontSize: 12, color: theme.colors.textTertiary, textAlign: 'right' }}>{alt.strength}</Text>}
                     <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 6 }}>

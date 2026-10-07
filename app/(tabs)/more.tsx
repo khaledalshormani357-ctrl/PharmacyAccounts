@@ -77,6 +77,7 @@ export default function MoreScreen() {
         </Section>
 
         <Section title="العمليات المالية">
+          <MenuItem icon="assignment-return" label="المرتجعات" sublabel="مرتجعات المبيعات والمشتريات وفواتيرها" color="#FF8B00" onPress={() => router.push('/returns' as any)} />
           <MenuItem icon="people" label="العملاء" sublabel="إدارة الحسابات والديون" color="#0052CC" onPress={() => router.push('/customers')} />
           <MenuItem icon="local-shipping" label="الموردون" sublabel="إدارة المشتريات والمدفوعات" color="#6554C0" onPress={() => router.push('/suppliers')} />
           <MenuItem icon="money-off" label="المصروفات" color="#DE350B" onPress={() => router.push('/expenses')} />
