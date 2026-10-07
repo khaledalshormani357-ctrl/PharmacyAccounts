@@ -6,8 +6,10 @@ import { useRouter } from 'expo-router';
 import { useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '@/contexts/ThemeContext';
-import { getAbcAnalysis, AbcItem } from '@/services/database';
+import { getAbcAnalysis, getSetting, AbcItem } from '@/services/database';
 import { formatCurrency, getDateRange } from '@/constants/i18n';
+import { PdfActions } from '@/components/PdfActions';
+import { buildTableReportHtml } from '@/services/pdfReport';
 
 const PERIODS = [
   { key: 'month', label: 'هذا الشهر' },
@@ -42,6 +44,23 @@ export default function AbcAnalysisScreen() {
     count: items.filter(i => i.abc_class === c).length,
     revenue: items.filter(i => i.abc_class === c).reduce((s, i) => s + i.total_revenue, 0),
   }));
+  const buildAbcPdf = () => {
+    const { from, to } = getDateRange(period);
+    return buildTableReportHtml({
+      pharmacyName: getSetting('pharmacy_name') || 'صيدليتي',
+      title: 'تحليل ABC للمبيعات',
+      periodLabel: PERIODS.find(item => item.key === period)?.label || period,
+      dateRange: from === to ? from : `${from} — ${to}`,
+      accent: '#6554C0',
+      summary: [
+        { label: 'إجمالي الإيراد', value: formatCurrency(totalRevenue), tone: 'positive' },
+        ...classCounts.map(item => ({ label: `الفئة ${item.class}`, value: `${item.count} صنف` })),
+      ],
+      columns: ['الصنف', 'الفئة', 'الإيراد', 'النسبة', 'التراكمي'],
+      rows: filtered.map(item => [item.trade_name, item.abc_class, formatCurrency(item.total_revenue), `${item.revenue_pct.toFixed(1)}%`, `${item.cumulative_pct.toFixed(1)}%`]),
+      footerNote: filter !== 'all' ? `الفئة المعروضة: ${filter}` : undefined,
+    });
+  };
 
   return (
     <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
@@ -51,7 +70,7 @@ export default function AbcAnalysisScreen() {
             <MaterialIcons name="arrow-forward" size={20} color="#FFFFFF" />
           </TouchableOpacity>
           <Text style={{ fontSize: 17, fontWeight: '700', color: '#FFFFFF' }}>تحليل ABC</Text>
-          <View style={{ width: 34 }} />
+          <PdfActions buildHtml={buildAbcPdf} title="تحليل ABC للمبيعات" />
         </View>
 
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, flexDirection: 'row', marginBottom: 10 }}>

@@ -6,9 +6,11 @@ import { useRouter } from 'expo-router';
 import { useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '@/contexts/ThemeContext';
-import { getPurchases, Purchase } from '@/services/database';
+import { getPurchases, getSetting, Purchase } from '@/services/database';
 import { formatCurrency, formatDate, getToday, getDateRange } from '@/constants/i18n';
 import { useAlert } from '@/template';
+import { PdfActions } from '@/components/PdfActions';
+import { buildTableReportHtml } from '@/services/pdfReport';
 
 const PERIODS = [
   { key: 'today', label: 'اليوم' },
@@ -39,15 +41,38 @@ export default function PurchasesScreen() {
   const totalAmount = purchases.reduce((s, p) => s + p.total, 0);
   const totalPaid = purchases.reduce((s, p) => s + p.amount_paid, 0);
   const totalRemaining = purchases.reduce((s, p) => s + p.remaining, 0);
+  const buildPurchasesPdf = () => {
+    const { from, to } = getDateRange(period);
+    const periodLabel = PERIODS.find(item => item.key === period)?.label || period;
+    return buildTableReportHtml({
+      pharmacyName: getSetting('pharmacy_name') || 'صيدليتي',
+      title: 'تقرير فواتير المشتريات',
+      periodLabel,
+      dateRange: from === to ? from : `${from} — ${to}`,
+      accent: '#6554C0',
+      summary: [
+        { label: 'عدد الفواتير', value: purchases.length },
+        { label: 'إجمالي المشتريات', value: formatCurrency(totalAmount) },
+        { label: 'المتبقي للموردين', value: formatCurrency(totalRemaining), tone: 'negative' },
+        { label: 'المدفوع', value: formatCurrency(totalPaid), tone: 'positive' },
+      ],
+      columns: ['الفاتورة', 'المورد', 'التاريخ', 'الإجمالي', 'المدفوع', 'المتبقي'],
+      rows: purchases.map(purchase => [purchase.invoice_number, purchase.supplier_name || 'مورد مباشر', formatDate(purchase.date), formatCurrency(purchase.total), formatCurrency(purchase.amount_paid), formatCurrency(purchase.remaining)]),
+      footerNote: search ? 'تم تطبيق البحث الحالي على التقرير.' : undefined,
+    });
+  };
 
   return (
     <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
       <View style={{ backgroundColor: '#6554C0', paddingTop: insets.top + 10, paddingBottom: 14, paddingHorizontal: 14 }}>
         <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-          <TouchableOpacity onPress={() => router.push('/add-purchase')} style={{ backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 6, flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-            <MaterialIcons name="add" size={16} color="#FFFFFF" />
-            <Text style={{ color: '#FFFFFF', fontSize: 12, fontWeight: '600' }}>فاتورة جديدة</Text>
-          </TouchableOpacity>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            <PdfActions buildHtml={buildPurchasesPdf} title="تقرير فواتير المشتريات" />
+            <TouchableOpacity onPress={() => router.push('/add-purchase')} style={{ backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 6, flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+              <MaterialIcons name="add" size={16} color="#FFFFFF" />
+              <Text style={{ color: '#FFFFFF', fontSize: 12, fontWeight: '600' }}>فاتورة جديدة</Text>
+            </TouchableOpacity>
+          </View>
           <Text style={{ fontSize: 17, fontWeight: '700', color: '#FFFFFF' }}>المشتريات</Text>
         </View>
         <View style={{ backgroundColor: 'rgba(255,255,255,0.15)', borderRadius: 10, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10, height: 38 }}>

@@ -6,8 +6,10 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useFocusEffect } from 'expo-router';
 import { useTheme } from '@/contexts/ThemeContext';
-import { getPurchase, getPurchaseItems, Purchase, PurchaseItem } from '@/services/database';
+import { getPurchase, getPurchaseItems, getSetting, Purchase, PurchaseItem } from '@/services/database';
 import { formatCurrency, formatDate } from '@/constants/i18n';
+import { PdfActions } from '@/components/PdfActions';
+import { buildInvoiceHtml } from '@/services/pdfReport';
 
 export default function PurchaseDetailScreen() {
   const { theme } = useTheme();
@@ -27,6 +29,31 @@ export default function PurchaseDetailScreen() {
   useFocusEffect(useCallback(() => { load(); }, [load]));
   if (!purchase) return null;
 
+  const buildInvoicePdf = () => buildInvoiceHtml({
+    pharmacyName: getSetting('pharmacy_name') || 'صيدليتي',
+    kind: 'purchase',
+    invoiceNumber: purchase.invoice_number,
+    date: formatDate(purchase.date),
+    partyName: purchase.supplier_name,
+    cancelled: purchase.cancelled,
+    cancelReason: purchase.cancel_reason,
+    subtotal: purchase.subtotal,
+    discount: purchase.discount,
+    total: purchase.total,
+    amountPaid: purchase.amount_paid,
+    remaining: purchase.remaining,
+    notes: purchase.notes,
+    items: items.map(item => ({
+      name: item.product_name,
+      quantity: item.quantity + item.free_quantity,
+      unit: item.unit,
+      unitPrice: item.purchase_price,
+      discount: item.discount,
+      total: item.line_total,
+      details: `دفعة: ${item.batch_number} · انتهاء: ${formatDate(item.expiry_date)}`,
+    })),
+  });
+
   return (
     <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
       <View style={{ backgroundColor: '#6554C0', paddingTop: insets.top + 10, paddingBottom: 16, paddingHorizontal: 14 }}>
@@ -35,7 +62,7 @@ export default function PurchaseDetailScreen() {
             <MaterialIcons name="arrow-forward" size={20} color="#FFFFFF" />
           </TouchableOpacity>
           <Text style={{ fontSize: 16, fontWeight: '700', color: '#FFFFFF' }}>{purchase.invoice_number}</Text>
-          <View style={{ width: 34 }} />
+          <PdfActions buildHtml={buildInvoicePdf} title={`فاتورة ${purchase.invoice_number}`} />
         </View>
         <View style={{ backgroundColor: 'rgba(0,0,0,0.15)', borderRadius: 12, padding: 12 }}>
           <Text style={{ fontSize: 14, fontWeight: '600', color: '#FFFFFF', textAlign: 'right', marginBottom: 10 }}>{purchase.supplier_name || 'مورد مباشر'}</Text>

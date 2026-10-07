@@ -6,9 +6,11 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useFocusEffect } from 'expo-router';
 import { useTheme } from '@/contexts/ThemeContext';
-import { getSale, getSaleItems, cancelSale, Sale, SaleItem } from '@/services/database';
+import { getSale, getSaleItems, cancelSale, getSetting, Sale, SaleItem } from '@/services/database';
 import { formatCurrency, formatDate, formatDateTime, AR } from '@/constants/i18n';
 import { useAlert } from '@/template';
+import { PdfActions } from '@/components/PdfActions';
+import { buildInvoiceHtml } from '@/services/pdfReport';
 
 export default function SaleDetailScreen() {
   const { theme } = useTheme();
@@ -32,6 +34,32 @@ export default function SaleDetailScreen() {
 
   const typeColor = sale.sale_type === 'cash' ? theme.colors.income : theme.colors.credit;
   const typeLabel = sale.sale_type === 'cash' ? 'نقدي' : 'آجل';
+  const buildInvoicePdf = () => buildInvoiceHtml({
+    pharmacyName: getSetting('pharmacy_name') || 'صيدليتي',
+    kind: 'sale',
+    invoiceNumber: sale.invoice_number,
+    date: formatDateTime(sale.created_at),
+    partyName: sale.customer_name,
+    paymentLabel: `بيع ${typeLabel}`,
+    cancelled: sale.cancelled,
+    cancelReason: sale.cancel_reason,
+    subtotal: sale.subtotal,
+    discount: sale.discount,
+    total: sale.total,
+    amountPaid: sale.amount_paid,
+    remaining: sale.remaining,
+    changeGiven: sale.change_given,
+    grossProfit: sale.gross_profit,
+    notes: sale.notes,
+    items: items.map(item => ({
+      name: item.product_name,
+      quantity: item.quantity,
+      unit: item.unit,
+      unitPrice: item.unit_price,
+      discount: item.discount,
+      total: item.line_total,
+    })),
+  });
 
   return (
     <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
@@ -54,6 +82,7 @@ export default function SaleDetailScreen() {
             </TouchableOpacity>
           </View>
           <Text style={{ fontSize: 16, fontWeight: '700', color: '#FFFFFF' }}>{sale.invoice_number}</Text>
+          <PdfActions buildHtml={buildInvoicePdf} title={`فاتورة ${sale.invoice_number}`} onError={(message) => showAlert('خطأ', message)} />
         </View>
 
         {sale.cancelled && (

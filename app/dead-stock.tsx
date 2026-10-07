@@ -6,8 +6,10 @@ import { useRouter } from 'expo-router';
 import { useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '@/contexts/ThemeContext';
-import { getDeadStock, InventoryItem } from '@/services/database';
+import { getDeadStock, getSetting, InventoryItem } from '@/services/database';
 import { formatCurrency } from '@/constants/i18n';
+import { PdfActions } from '@/components/PdfActions';
+import { buildTableReportHtml } from '@/services/pdfReport';
 
 const PERIODS = [
   { days: 60, label: '60 يوم' },
@@ -26,14 +28,29 @@ export default function DeadStockScreen() {
   useFocusEffect(useCallback(() => { setItems(getDeadStock(days)); }, [days]));
 
   const totalValue = items.reduce((s, i) => s + i.total_quantity * i.selling_price, 0);
+  const buildDeadStockPdf = () => buildTableReportHtml({
+    pharmacyName: getSetting('pharmacy_name') || 'صيدليتي',
+    title: 'تقرير المخزون الراكد',
+    periodLabel: `دون حركة لمدة ${days} يومًا`,
+    accent: '#6554C0',
+    summary: [
+      { label: 'عدد الأصناف', value: items.length },
+      { label: 'قيمة المخزون الراكد', value: formatCurrency(totalValue), tone: 'negative' },
+    ],
+    columns: ['الصنف', 'الرصيد', 'سعر البيع', 'قيمة المخزون', 'أقرب انتهاء'],
+    rows: items.map(item => [item.trade_name, `${item.total_quantity} ${item.inventory_unit}`, formatCurrency(item.selling_price), formatCurrency(item.total_quantity * item.selling_price), item.nearest_expiry || '—']),
+  });
 
   return (
     <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
       <View style={{ backgroundColor: '#6554C0', paddingTop: insets.top + 10, paddingBottom: 14, paddingHorizontal: 14 }}>
         <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-          <TouchableOpacity onPress={() => router.back()} style={{ width: 34, height: 34, backgroundColor: 'rgba(255,255,255,0.15)', borderRadius: 8, alignItems: 'center', justifyContent: 'center' }}>
-            <MaterialIcons name="arrow-forward" size={20} color="#FFFFFF" />
-          </TouchableOpacity>
+          <View style={{ flexDirection: 'row', gap: 6 }}>
+            <TouchableOpacity onPress={() => router.back()} style={{ width: 34, height: 34, backgroundColor: 'rgba(255,255,255,0.15)', borderRadius: 8, alignItems: 'center', justifyContent: 'center' }}>
+              <MaterialIcons name="arrow-forward" size={20} color="#FFFFFF" />
+            </TouchableOpacity>
+            <PdfActions buildHtml={buildDeadStockPdf} title="تقرير المخزون الراكد" />
+          </View>
           <Text style={{ fontSize: 17, fontWeight: '700', color: '#FFFFFF' }}>المخزون الراكد</Text>
           <Text style={{ fontSize: 13, color: 'rgba(255,255,255,0.8)' }}>{items.length} صنف</Text>
         </View>

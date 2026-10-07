@@ -6,9 +6,11 @@ import { useRouter } from 'expo-router';
 import { useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '@/contexts/ThemeContext';
-import { getCashBalance, getCashTransactions, addCashDeposit, addCashWithdrawal, CashTransaction } from '@/services/database';
+import { getCashBalance, getCashTransactions, addCashDeposit, addCashWithdrawal, getSetting, CashTransaction } from '@/services/database';
 import { formatCurrency, formatDateTime } from '@/constants/i18n';
 import { useAlert } from '@/template';
+import { PdfActions } from '@/components/PdfActions';
+import { buildTableReportHtml } from '@/services/pdfReport';
 
 const TX_TYPE_LABELS: Record<string, string> = {
   SALE_CASH: 'بيع نقدي', COLLECTION: 'تحصيل دين', PURCHASE_PAYMENT: 'دفع للمورد',
@@ -42,6 +44,23 @@ export default function CashboxScreen() {
     setShowModal(null); setModalAmount(''); setModalNote('');
     load();
   };
+  const buildCashboxPdf = () => {
+    const totalIncoming = transactions.filter(transaction => transaction.amount > 0).reduce((sum, transaction) => sum + transaction.amount, 0);
+    const totalOutgoing = transactions.filter(transaction => transaction.amount < 0).reduce((sum, transaction) => sum + Math.abs(transaction.amount), 0);
+    return buildTableReportHtml({
+      pharmacyName: getSetting('pharmacy_name') || 'صيدليتي',
+      title: 'تقرير حركة الصندوق',
+      periodLabel: 'آخر 50 حركة',
+      accent: '#00875A',
+      summary: [
+        { label: 'الرصيد الحالي', value: formatCurrency(balance), tone: balance >= 0 ? 'positive' : 'negative' },
+        { label: 'إجمالي الوارد', value: formatCurrency(totalIncoming), tone: 'positive' },
+        { label: 'إجمالي الصادر', value: formatCurrency(totalOutgoing), tone: 'negative' },
+      ],
+      columns: ['التاريخ', 'نوع الحركة', 'البيان', 'المبلغ'],
+      rows: transactions.map(transaction => [transaction.date, TX_TYPE_LABELS[transaction.type] || transaction.type, transaction.note || '—', `${transaction.amount > 0 ? '+' : '−'}${formatCurrency(Math.abs(transaction.amount))}`]),
+    });
+  };
 
   return (
     <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
@@ -51,7 +70,7 @@ export default function CashboxScreen() {
             <MaterialIcons name="arrow-forward" size={20} color="#FFFFFF" />
           </TouchableOpacity>
           <Text style={{ fontSize: 17, fontWeight: '700', color: '#FFFFFF' }}>الصندوق</Text>
-          <View style={{ width: 34 }} />
+          <PdfActions buildHtml={buildCashboxPdf} title="تقرير حركة الصندوق" onError={(message) => showAlert('خطأ', message)} />
         </View>
         <View style={{ alignItems: 'center', marginBottom: 16 }}>
           <Text style={{ fontSize: 12, color: 'rgba(255,255,255,0.7)' }}>الرصيد الحالي</Text>

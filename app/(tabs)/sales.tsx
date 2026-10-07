@@ -9,9 +9,11 @@ import { useRouter } from 'expo-router';
 import { useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '@/contexts/ThemeContext';
-import { getSales, cancelSale, Sale } from '@/services/database';
+import { getSales, cancelSale, getSetting, Sale } from '@/services/database';
 import { formatCurrency, formatDate, getToday, AR } from '@/constants/i18n';
 import { useAlert } from '@/template';
+import { PdfActions } from '@/components/PdfActions';
+import { buildTableReportHtml } from '@/services/pdfReport';
 
 const FILTERS = [
   { key: 'all', label: 'الكل' },
@@ -108,15 +110,37 @@ export default function SalesScreen() {
 
   const totalSales = sales.reduce((s, sale) => s + sale.total, 0);
   const totalProfit = sales.reduce((s, sale) => s + sale.gross_profit, 0);
+  const buildSalesPdf = () => {
+    const { from, to } = getDateRange(period);
+    const periodLabel = PERIODS.find(item => item.key === period)?.label || period;
+    return buildTableReportHtml({
+      pharmacyName: getSetting('pharmacy_name') || 'صيدليتي',
+      title: 'تقرير فواتير المبيعات',
+      periodLabel,
+      dateRange: from === to ? from : `${from} — ${to}`,
+      accent: theme.colors.primary,
+      summary: [
+        { label: 'عدد الفواتير', value: sales.length },
+        { label: 'إجمالي المبيعات', value: formatCurrency(totalSales), tone: 'positive' },
+        { label: 'إجمالي الربح', value: formatCurrency(totalProfit), tone: 'positive' },
+      ],
+      columns: ['الفاتورة', 'العميل', 'النوع', 'التاريخ', 'الإجمالي', 'المتبقي'],
+      rows: sales.map(sale => [sale.invoice_number, sale.customer_name || 'عميل نقدي', sale.sale_type === 'cash' ? 'نقدي' : 'آجل', formatDate(sale.date), formatCurrency(sale.total), formatCurrency(sale.remaining)]),
+      footerNote: filter !== 'all' || search ? 'تم تطبيق الفلاتر الحالية على التقرير.' : undefined,
+    });
+  };
 
   return (
     <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
       <View style={{ backgroundColor: theme.colors.primary, paddingTop: insets.top + 10, paddingBottom: 14, paddingHorizontal: 14 }}>
         <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-          <TouchableOpacity onPress={() => router.push('/pos')} style={{ backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 6, flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-            <MaterialIcons name="add" size={16} color="#FFFFFF" />
-            <Text style={{ color: '#FFFFFF', fontSize: 12, fontWeight: '600' }}>بيع جديد</Text>
-          </TouchableOpacity>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            <PdfActions buildHtml={buildSalesPdf} title="تقرير فواتير المبيعات" onError={(message) => showAlert('خطأ', message)} />
+            <TouchableOpacity onPress={() => router.push('/pos')} style={{ backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 6, flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+              <MaterialIcons name="add" size={16} color="#FFFFFF" />
+              <Text style={{ color: '#FFFFFF', fontSize: 12, fontWeight: '600' }}>بيع جديد</Text>
+            </TouchableOpacity>
+          </View>
           <Text style={{ fontSize: 17, fontWeight: '700', color: '#FFFFFF' }}>المبيعات</Text>
         </View>
         <View style={{ backgroundColor: 'rgba(255,255,255,0.15)', borderRadius: 10, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10, height: 38 }}>

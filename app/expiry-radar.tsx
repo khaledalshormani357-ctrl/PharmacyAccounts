@@ -6,8 +6,10 @@ import { useRouter } from 'expo-router';
 import { useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '@/contexts/ThemeContext';
-import { getExpiryRadar, ExpiryRadarItem } from '@/services/database';
+import { getExpiryRadar, getSetting, ExpiryRadarItem } from '@/services/database';
 import { formatCurrency, formatDate } from '@/constants/i18n';
+import { PdfActions } from '@/components/PdfActions';
+import { buildTableReportHtml } from '@/services/pdfReport';
 
 const GROUPS = [
   { key: 'expired', label: 'منتهية الصلاحية', color: '#BF2600', bg: '#FFEBE6' },
@@ -29,14 +31,30 @@ export default function ExpiryRadarScreen() {
   const totalValue = filtered.reduce((s, i) => s + i.stock_value, 0);
 
   const groupCounts = GROUPS.map(g => ({ ...g, count: items.filter(i => i.group === g.key).length, value: items.filter(i => i.group === g.key).reduce((s, i) => s + i.stock_value, 0) }));
+  const buildExpiryPdf = () => buildTableReportHtml({
+    pharmacyName: getSetting('pharmacy_name') || 'صيدليتي',
+    title: 'تقرير رادار انتهاء الصلاحية',
+    periodLabel: activeGroup ? GROUPS.find(group => group.key === activeGroup)?.label : 'كل الأصناف المعرضة للخطر',
+    accent: '#FF8B00',
+    summary: [
+      { label: 'عدد الدفعات', value: filtered.length, tone: 'negative' },
+      { label: 'قيمة المخزون المعرض للخطر', value: formatCurrency(totalValue), tone: 'negative' },
+      { label: 'الدفعات المنتهية', value: groupCounts.find(group => group.key === 'expired')?.count || 0, tone: 'negative' },
+    ],
+    columns: ['الصنف', 'رقم الدفعة', 'تاريخ الانتهاء', 'المتبقي', 'الكمية', 'القيمة'],
+    rows: filtered.map(item => [item.product_name, item.batch_number, formatDate(item.expiry_date), item.days_to_expiry <= 0 ? 'منتهي' : `${item.days_to_expiry} يوم`, `${item.quantity} ${item.unit}`, formatCurrency(item.stock_value)]),
+  });
 
   return (
     <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
       <View style={{ backgroundColor: '#FF8B00', paddingTop: insets.top + 10, paddingBottom: 14, paddingHorizontal: 14 }}>
         <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-          <TouchableOpacity onPress={() => router.back()} style={{ width: 34, height: 34, backgroundColor: 'rgba(255,255,255,0.15)', borderRadius: 8, alignItems: 'center', justifyContent: 'center' }}>
-            <MaterialIcons name="arrow-forward" size={20} color="#FFFFFF" />
-          </TouchableOpacity>
+          <View style={{ flexDirection: 'row', gap: 6 }}>
+            <TouchableOpacity onPress={() => router.back()} style={{ width: 34, height: 34, backgroundColor: 'rgba(255,255,255,0.15)', borderRadius: 8, alignItems: 'center', justifyContent: 'center' }}>
+              <MaterialIcons name="arrow-forward" size={20} color="#FFFFFF" />
+            </TouchableOpacity>
+            <PdfActions buildHtml={buildExpiryPdf} title="تقرير رادار انتهاء الصلاحية" />
+          </View>
           <Text style={{ fontSize: 17, fontWeight: '700', color: '#FFFFFF' }}>رادار الانتهاء</Text>
           <Text style={{ fontSize: 13, color: 'rgba(255,255,255,0.8)' }}>{items.length} صنف</Text>
         </View>

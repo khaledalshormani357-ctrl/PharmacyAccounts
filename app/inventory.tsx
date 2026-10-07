@@ -9,8 +9,10 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useFocusEffect } from 'expo-router';
 import { useTheme } from '@/contexts/ThemeContext';
-import { getInventoryList, InventoryItem } from '@/services/database';
+import { getInventoryList, getSetting, InventoryItem } from '@/services/database';
 import { formatCurrency, AR } from '@/constants/i18n';
+import { PdfActions } from '@/components/PdfActions';
+import { buildTableReportHtml } from '@/services/pdfReport';
 
 const FILTERS = [
   { key: 'all', label: 'الكل', icon: 'inventory-2' },
@@ -51,6 +53,24 @@ export default function InventoryScreen() {
   }, [filter, search]);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
+  const buildInventoryPdf = () => {
+    const statusLabel: Record<InventoryItem['status'], string> = { ok: 'متوفر', low: 'منخفض', out: 'نافد', expiring: 'قارب الانتهاء', expired: 'منتهي' };
+    const stockValue = items.reduce((sum, item) => sum + (item.total_quantity * item.selling_price), 0);
+    return buildTableReportHtml({
+      pharmacyName: getSetting('pharmacy_name') || 'صيدليتي',
+      title: 'تقرير المخزون',
+      periodLabel: FILTERS.find(item => item.key === filter)?.label || 'الكل',
+      accent: '#00B8D9',
+      summary: [
+        { label: 'عدد الأصناف', value: items.length },
+        { label: 'قيمة المخزون', value: formatCurrency(stockValue) },
+        { label: 'المنخفض أو النافد', value: items.filter(item => item.status === 'low' || item.status === 'out').length, tone: 'negative' },
+      ],
+      columns: ['الصنف', 'الرصيد', 'سعر البيع', 'الحالة', 'أقرب انتهاء'],
+      rows: items.map(item => [item.trade_name, `${item.total_quantity} ${item.inventory_unit}`, formatCurrency(item.selling_price), statusLabel[item.status], item.nearest_expiry || '—']),
+      footerNote: search ? `نتائج البحث: ${search}` : undefined,
+    });
+  };
 
   return (
     <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
@@ -61,6 +81,7 @@ export default function InventoryScreen() {
               <MaterialIcons name="add" size={16} color="#FFFFFF" />
               <Text style={{ color: '#FFFFFF', fontSize: 12, fontWeight: '600' }}>صنف جديد</Text>
             </TouchableOpacity>
+            <PdfActions buildHtml={buildInventoryPdf} title="تقرير المخزون" />
             <TouchableOpacity onPress={() => router.back()} style={{ width: 34, height: 34, backgroundColor: 'rgba(255,255,255,0.15)', borderRadius: 8, alignItems: 'center', justifyContent: 'center' }}>
               <MaterialIcons name="arrow-forward" size={20} color="#FFFFFF" />
             </TouchableOpacity>

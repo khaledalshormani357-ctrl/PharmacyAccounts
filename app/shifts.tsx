@@ -6,9 +6,11 @@ import { useRouter } from 'expo-router';
 import { useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '@/contexts/ThemeContext';
-import { getShifts, getOpenShift, openShift, closeShift, Shift } from '@/services/database';
+import { getShifts, getOpenShift, openShift, closeShift, getSetting, Shift } from '@/services/database';
 import { formatCurrency, formatDateTime } from '@/constants/i18n';
 import { useAlert } from '@/template';
+import { PdfActions } from '@/components/PdfActions';
+import { buildTableReportHtml } from '@/services/pdfReport';
 
 export default function ShiftsScreen() {
   const { theme } = useTheme();
@@ -47,14 +49,30 @@ export default function ShiftsScreen() {
     load();
     showAlert('تم', 'تم إغلاق الوردية');
   };
+  const buildShiftsPdf = () => buildTableReportHtml({
+    pharmacyName: getSetting('pharmacy_name') || 'صيدليتي',
+    title: 'تقرير الورديات',
+    periodLabel: 'آخر 20 وردية',
+    accent: '#0052CC',
+    summary: [
+      { label: 'عدد الورديات', value: shifts.length },
+      { label: 'الوردية المفتوحة', value: openShiftData ? 'نعم' : 'لا', tone: openShiftData ? 'positive' : 'neutral' },
+      { label: 'إجمالي المبيعات', value: formatCurrency(shifts.reduce((sum, shift) => sum + shift.total_sales, 0)), tone: 'positive' },
+    ],
+    columns: ['الحالة', 'وقت الفتح', 'وقت الإغلاق', 'المبيعات', 'المصروفات', 'النقد الفعلي', 'الفرق'],
+    rows: shifts.map(shift => [shift.status === 'OPEN' ? 'مفتوحة' : 'مغلقة', shift.opened_at, shift.closed_at || '—', formatCurrency(shift.total_sales), formatCurrency(shift.total_expenses), shift.actual_cash === null ? '—' : formatCurrency(shift.actual_cash), shift.difference === null ? '—' : formatCurrency(shift.difference)]),
+  });
 
   return (
     <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
       <View style={{ backgroundColor: '#0052CC', paddingTop: insets.top + 10, paddingBottom: 14, paddingHorizontal: 14 }}>
         <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-          <TouchableOpacity onPress={() => router.back()} style={{ width: 34, height: 34, backgroundColor: 'rgba(255,255,255,0.15)', borderRadius: 8, alignItems: 'center', justifyContent: 'center' }}>
-            <MaterialIcons name="arrow-forward" size={20} color="#FFFFFF" />
-          </TouchableOpacity>
+          <View style={{ flexDirection: 'row', gap: 6 }}>
+            <TouchableOpacity onPress={() => router.back()} style={{ width: 34, height: 34, backgroundColor: 'rgba(255,255,255,0.15)', borderRadius: 8, alignItems: 'center', justifyContent: 'center' }}>
+              <MaterialIcons name="arrow-forward" size={20} color="#FFFFFF" />
+            </TouchableOpacity>
+            <PdfActions buildHtml={buildShiftsPdf} title="تقرير الورديات" onError={(message) => showAlert('خطأ', message)} />
+          </View>
           <Text style={{ fontSize: 17, fontWeight: '700', color: '#FFFFFF' }}>الورديات</Text>
           {openShiftData ? (
             <TouchableOpacity onPress={() => setShowCloseModal(true)} style={{ backgroundColor: '#FF5630', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 6 }}>

@@ -1,6 +1,6 @@
 // Smart Pharmacy ERP — Reports Tab (comprehensive)
 import React, { useState, useCallback } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, RefreshControl, ActivityIndicator } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, RefreshControl } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from 'expo-router';
@@ -8,8 +8,9 @@ import { useTheme } from '@/contexts/ThemeContext';
 import { getReportSummary, getExpensesByCategory, ReportSummary, getSetting } from '@/services/database';
 import { formatCurrency, getDateRange, AR } from '@/constants/i18n';
 import { Card } from '@/components/ui';
-import { generateAndSharePdf } from '@/services/pdfReport';
+import { buildReportHtml } from '@/services/pdfReport';
 import { useAlert } from '@/template';
+import { PdfActions } from '@/components/PdfActions';
 
 const PERIODS = [
   { key: 'today', label: 'اليوم' },
@@ -39,7 +40,6 @@ export default function ReportsScreen() {
   const [summary, setSummary] = useState<ReportSummary | null>(null);
   const [expByCategory, setExpByCategory] = useState<{ category: string; total: number }[]>([]);
   const [refreshing, setRefreshing] = useState(false);
-  const [exporting, setExporting] = useState(false);
 
   const load = useCallback(() => {
     try {
@@ -49,18 +49,17 @@ export default function ReportsScreen() {
     } catch (e) { console.error(e); }
   }, [period]);
 
-  const handleExportPdf = useCallback(async () => {
-    if (!summary) return;
-    setExporting(true);
-    try {
-      const pharmacyName = getSetting('pharmacy_name') || 'صيدليتي';
-      const periodMap: Record<string, string> = { today: 'اليوم', yesterday: 'أمس', week: 'هذا الأسبوع', month: 'هذا الشهر', year: 'هذا العام' };
-      const { from, to } = getDateRange(period);
-      await generateAndSharePdf({ pharmacyName, periodLabel: periodMap[period] || period, dateRange: from === to ? from : `${from} — ${to}`, summary: { ...summary, netCash: summary.netCash, transactionCount: summary.transactionCount } as any, expensesByCategory: expByCategory });
-    } catch (e: any) {
-      showAlert('خطأ', e?.message || 'تعذر إنشاء التقرير');
-    } finally { setExporting(false); }
-  }, [summary, period, expByCategory]);
+  const buildFinancialPdf = () => {
+    const periodMap: Record<string, string> = { today: 'اليوم', yesterday: 'أمس', week: 'هذا الأسبوع', month: 'هذا الشهر', year: 'هذا العام' };
+    const { from, to } = getDateRange(period);
+    return buildReportHtml({
+      pharmacyName: getSetting('pharmacy_name') || 'صيدليتي',
+      periodLabel: periodMap[period] || period,
+      dateRange: from === to ? from : `${from} — ${to}`,
+      summary: summary || { cashSales: 0, creditSales: 0, totalSales: 0, collections: 0, totalExpenses: 0, totalPurchases: 0, grossProfit: 0, netCash: 0, transactionCount: 0, cogs: 0 },
+      expensesByCategory: expByCategory,
+    });
+  };
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
@@ -71,14 +70,7 @@ export default function ReportsScreen() {
     <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
       <View style={{ backgroundColor: '#0052CC', paddingTop: insets.top + 12, paddingBottom: 16, paddingHorizontal: 14 }}>
         <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-          <TouchableOpacity
-            onPress={handleExportPdf}
-            disabled={exporting || !summary}
-            style={{ backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 6, flexDirection: 'row', alignItems: 'center', gap: 4, opacity: (exporting || !summary) ? 0.5 : 1 }}
-          >
-            {exporting ? <ActivityIndicator size="small" color="#FFFFFF" /> : <MaterialIcons name="picture-as-pdf" size={16} color="#FFFFFF" />}
-            <Text style={{ color: '#FFFFFF', fontSize: 12, fontWeight: '600' }}>{exporting ? 'جاري...' : 'PDF'}</Text>
-          </TouchableOpacity>
+          {summary ? <PdfActions buildHtml={buildFinancialPdf} title="التقرير المالي" onError={(message) => showAlert('خطأ', message)} /> : <View style={{ width: 74 }} />}
           <Text style={{ fontSize: 17, fontWeight: '700', color: '#FFFFFF' }}>التقارير</Text>
           <View style={{ width: 70 }} />
         </View>

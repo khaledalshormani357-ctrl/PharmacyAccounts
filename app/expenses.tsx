@@ -6,9 +6,11 @@ import { useRouter } from 'expo-router';
 import { useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '@/contexts/ThemeContext';
-import { getExpenses, deleteExpense, getExpensesByCategory, Expense } from '@/services/database';
+import { getExpenses, deleteExpense, getExpensesByCategory, getSetting, Expense } from '@/services/database';
 import { formatCurrency, formatDate, getToday, getDateRange } from '@/constants/i18n';
 import { useAlert } from '@/template';
+import { PdfActions } from '@/components/PdfActions';
+import { buildTableReportHtml } from '@/services/pdfReport';
 
 const PERIODS = [
   { key: 'today', label: 'اليوم' },
@@ -35,6 +37,24 @@ export default function ExpensesScreen() {
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
   const total = expenses.reduce((s, e) => s + e.amount, 0);
+  const buildExpensesPdf = () => {
+    const { from, to } = getDateRange(period);
+    const periodLabel = PERIODS.find(item => item.key === period)?.label || period;
+    return buildTableReportHtml({
+      pharmacyName: getSetting('pharmacy_name') || 'صيدليتي',
+      title: 'تقرير المصروفات',
+      periodLabel,
+      dateRange: from === to ? from : `${from} — ${to}`,
+      accent: theme.colors.error,
+      summary: [
+        { label: 'إجمالي المصروفات', value: formatCurrency(total), tone: 'negative' },
+        { label: 'عدد القيود', value: expenses.length },
+        { label: 'عدد الفئات', value: byCategory.length },
+      ],
+      columns: ['الفئة', 'الملاحظة', 'التاريخ', 'المبلغ'],
+      rows: expenses.map(expense => [expense.category, expense.note || '—', formatDate(expense.date), formatCurrency(expense.amount)]),
+    });
+  };
 
   const handleDelete = (e: Expense) => {
     showAlert('حذف المصروف', 'هل تريد حذف هذا المصروف؟', [
@@ -52,6 +72,7 @@ export default function ExpensesScreen() {
               <MaterialIcons name="add" size={16} color="#FFFFFF" />
               <Text style={{ color: '#FFFFFF', fontSize: 12, fontWeight: '600' }}>مصروف جديد</Text>
             </TouchableOpacity>
+            <PdfActions buildHtml={buildExpensesPdf} title="تقرير المصروفات" onError={(message) => showAlert('خطأ', message)} />
             <TouchableOpacity onPress={() => router.back()} style={{ width: 34, height: 34, backgroundColor: 'rgba(255,255,255,0.15)', borderRadius: 8, alignItems: 'center', justifyContent: 'center' }}>
               <MaterialIcons name="arrow-forward" size={20} color="#FFFFFF" />
             </TouchableOpacity>
