@@ -8,12 +8,18 @@ import { StatusBar } from 'expo-status-bar';
 import { databaseReady, getSetting } from '@/services/database';
 import { PinLock } from '@/components/ui';
 import { CloudAuthGate } from '@/components/CloudAuthGate';
+import { AnimatedBrandSplash } from '@/components/AnimatedBrandSplash';
+import * as SplashScreen from 'expo-splash-screen';
+
+void SplashScreen.preventAutoHideAsync().catch(() => undefined);
 
 function AppShell() {
   const [pinChecked, setPinChecked] = useState(false);
   const [pinRequired, setPinRequired] = useState(false);
   const [pinCode, setPinCode] = useState('');
   const [pharmacyName, setPharmacyName] = useState('صيدلية ذكية');
+  const [showBrandSplash, setShowBrandSplash] = useState(true);
+  const hideBrandSplash = useCallback(() => setShowBrandSplash(false), []);
 
   useEffect(() => {
     try {
@@ -37,19 +43,17 @@ function AppShell() {
     setPinChecked(true);
   }, []);
 
-  if (pinRequired && !pinChecked) {
-    return (
-      <PinLock correctPin={pinCode} onUnlock={handleUnlock} pharmacyName={pharmacyName} />
-    );
-  }
-
   return (
     <>
       <StatusBar style="light" />
-      <Stack screenOptions={{ headerShown: false, animation: 'slide_from_left' }}>
+      {pinRequired && !pinChecked ? (
+        <PinLock correctPin={pinCode} onUnlock={handleUnlock} pharmacyName={pharmacyName} />
+      ) : (
+        <Stack screenOptions={{ headerShown: false, animation: 'slide_from_left' }}>
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
         <Stack.Screen name="setup" options={{ headerShown: false }} />
         <Stack.Screen name="login" options={{ headerShown: false }} />
+        <Stack.Screen name="reset-password" options={{ headerShown: false }} />
         <Stack.Screen name="pos" options={{ headerShown: false }} />
         <Stack.Screen name="add-product" options={{ headerShown: false, presentation: 'modal' }} />
         <Stack.Screen name="product-detail" options={{ headerShown: false }} />
@@ -80,7 +84,9 @@ function AppShell() {
         <Stack.Screen name="returns" options={{ headerShown: false }} />
         <Stack.Screen name="new-return" options={{ headerShown: false }} />
         <Stack.Screen name="return-detail" options={{ headerShown: false }} />
-      </Stack>
+        </Stack>
+      )}
+      {showBrandSplash && <AnimatedBrandSplash onFinish={hideBrandSplash} />}
     </>
   );
 }
@@ -98,7 +104,7 @@ export default function RootLayout() {
     <AlertProvider>
       <CloudAuthGate>
         <SafeAreaProvider>
-          <ThemeProvider>
+      <ThemeProvider>
             <AppShell />
           </ThemeProvider>
         </SafeAreaProvider>

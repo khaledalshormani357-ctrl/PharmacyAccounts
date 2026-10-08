@@ -11,15 +11,17 @@ function CloudAuthContent({ children }: { children: ReactNode }) {
   const { user, loading, initialized } = useAuth();
   const router = useRouter();
   const segments = useSegments();
-  const onLogin = segments[0] === 'login';
+  const firstSegment = segments[0] as string | undefined;
+  const onLogin = firstSegment === 'login';
+  const onPasswordReset = firstSegment === 'reset-password';
 
   useEffect(() => {
     if (!initialized || loading) return;
-    if (!user && !onLogin) router.replace('/login');
+    if (!user && !onLogin && !onPasswordReset) router.replace('/login' as never);
     if (user && onLogin) router.replace('/(tabs)');
-  }, [initialized, loading, user, onLogin, router]);
+  }, [initialized, loading, user, onLogin, onPasswordReset, router]);
 
-  if (!initialized || loading || (!user && !onLogin)) {
+  if (!initialized || loading || (!user && !onLogin && !onPasswordReset)) {
     return (
       <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F4F5F7' }}>
         <ActivityIndicator size="large" color="#00875A" />

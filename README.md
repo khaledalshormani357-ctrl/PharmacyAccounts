@@ -52,6 +52,10 @@ npm run lint
 
 For a full list of dependencies, see [package.json](./package.json).
 
+## Password Recovery Deep Link
+
+Password reset emails return to the app using `pharmacyaccounts://reset-password`. Add this exact URL to the Supabase project's **Authentication → URL Configuration → Redirect URLs** allow list. The app's `pharmacyaccounts` scheme is configured in `app.json`; the dashboard allow-list is a one-time project setting outside this repository.
+
 ## Development Tools
 
 - TypeScript: ~5.8.3

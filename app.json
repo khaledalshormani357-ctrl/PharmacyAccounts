@@ -6,7 +6,7 @@
     "orientation": "portrait",
     "icon": "./assets/images/logo.png",
     "scheme": "pharmacyaccounts",
-    "userInterfaceStyle": "automatic",
+    "userInterfaceStyle": "light",
     "ios": {
       "supportsTablet": true
     },
@@ -25,12 +25,22 @@
       [
         "expo-splash-screen",
         {
-          "image": "./assets/images/logo.png",
-          "imageWidth": 200,
+          "image": "./assets/images/pharmacy-ai-mark.png",
+          "imageWidth": 156,
           "resizeMode": "contain",
-          "backgroundColor": "#ffffff"
+          "backgroundColor": "#0A1530",
+          "dark": {
+            "image": "./assets/images/pharmacy-ai-mark.png",
+            "backgroundColor": "#0A1530"
+          }
         }
       ],
+      [
+        "expo-local-authentication",
+        {
+          "faceIDPermission": "اسمح لـ صيدلية الذكاء باستخدام Face ID للتحقق من هويتك وتسجيل الدخول."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": false
