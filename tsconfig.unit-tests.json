@@ -15,6 +15,7 @@
     "services/unit-conversion.ts",
     "services/erp-database.ts",
     "services/customer-invoice.ts",
-    "services/return-invoice.ts"
+    "services/return-invoice.ts",
+    "services/drug-catalog-utils.ts"
   ]
 }

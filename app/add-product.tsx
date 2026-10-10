@@ -8,10 +8,11 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useTheme } from '@/contexts/ThemeContext';
-import { addProduct, createOpeningStock, getProduct, getProductUnits, hasProductStockHistory, replaceProductUnits, updateProduct } from '@/services/database';
+import { addProduct, createOpeningStock, getProduct, getProductByCatalogSourceId, getProductUnits, hasProductStockHistory, replaceProductUnits, updateProduct } from '@/services/database';
 import { AR } from '@/constants/i18n';
 import { useAlert } from '@/template';
 import { deriveUnitFactors, formatUnitEquivalents, isValidIsoDate, isValidUnitQuantity, priceForUnit } from '@/services/unit-conversion';
+import { getDrugCatalogItem } from '@/services/drug-catalog';
 
 const DOSAGE_FORMS = ['أقراص', 'كبسول', 'شراب', 'حقن', 'كريم', 'مرهم', 'قطرة', 'بخاخ', 'تحاميل', 'مسحوق', 'أخرى'];
 const CATEGORIES = ['مضادات حيوية', 'مسكنات', 'فيتامينات', 'قلب وأوعية', 'جهاز هضمي', 'جهاز تنفسي', 'عيون وأذن', 'جلدية', 'مستلزمات طبية', 'أخرى'];
@@ -23,8 +24,9 @@ export default function AddProductScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { showAlert } = useAlert();
-  const { id } = useLocalSearchParams<{ id?: string }>();
+  const { id, catalogSourceId: routeCatalogSourceId } = useLocalSearchParams<{ id?: string; catalogSourceId?: string }>();
   const isEdit = !!id;
+  const isCatalogImport = !isEdit && !!routeCatalogSourceId;
 
   const [barcode, setBarcode] = useState('');
   const [internalCode, setInternalCode] = useState('');
@@ -49,6 +51,12 @@ export default function AddProductScreen() {
   const [openingCost, setOpeningCost] = useState('');
   const [openingBatch, setOpeningBatch] = useState('');
   const [openingExpiry, setOpeningExpiry] = useState('');
+  const [catalogSourceId, setCatalogSourceId] = useState<string | null>(routeCatalogSourceId || null);
+  const [catalogLoading, setCatalogLoading] = useState(false);
+  const [catalogLoadFailed, setCatalogLoadFailed] = useState(false);
+  const [catalogItemReady, setCatalogItemReady] = useState(false);
+  const [catalogUnitReviewRequired, setCatalogUnitReviewRequired] = useState(false);
+  const [catalogUnitReviewConfirmed, setCatalogUnitReviewConfirmed] = useState(false);
 
   // Load existing product if editing
   React.useEffect(() => {
@@ -73,6 +81,7 @@ export default function AddProductScreen() {
         setPrescriptionRequired(p.prescription_required);
         setControlled(p.controlled);
         setNotes(p.notes || '');
+        setCatalogSourceId(p.catalog_source_id || null);
         const currentUnits = getProductUnits(p.id).filter(u => u.unit_name !== p.inventory_unit);
         setUnits(currentUnits.map(u => ({
           unit_name: u.unit_name,
@@ -84,6 +93,47 @@ export default function AddProductScreen() {
       }
     }
   }, [id]);
+
+  // Prefill descriptive fields only. Prices, stock thresholds and opening stock are always entered locally.
+  React.useEffect(() => {
+    if (!routeCatalogSourceId || isEdit) return;
+    let cancelled = false;
+    setCatalogLoading(true);
+    void getDrugCatalogItem(routeCatalogSourceId).then(item => {
+      if (cancelled) return;
+      if (!item) { setCatalogLoadFailed(true); return; }
+      const baseUnit = item.base_unit?.trim() || 'قطعة';
+      const sellingUnit = item.selling_unit?.trim() || '';
+      setCatalogSourceId(item.source_id);
+      setTradeName(item.trade_name_ar);
+      setGenericName(item.generic_name || '');
+      setActiveIngredient(item.active_ingredient || '');
+      setStrength(item.strength || '');
+      setDosageForm(item.dosage_form || 'أخرى');
+      setManufacturer(item.manufacturer_name || '');
+      setCategory(item.category_ar || 'أخرى');
+      setInventoryUnit(baseUnit);
+      setOpeningUnit(baseUnit);
+      setMinStock('0');
+      setReorderLevel('0');
+      setPrescriptionRequired(false);
+      setControlled(false);
+      setCatalogUnitReviewConfirmed(false);
+      if (sellingUnit && sellingUnit !== baseUnit && item.pack_size != null && item.pack_size > 0) {
+        setUnits([{ unit_name: sellingUnit, parent_unit_name: baseUnit, quantity_per_parent: String(item.pack_size), sale_price: '', purchase_price: '' }]);
+        setCatalogUnitReviewRequired(true);
+      } else {
+        setUnits([]);
+        setCatalogUnitReviewRequired(false);
+      }
+      setCatalogItemReady(true);
+    }).catch(() => {
+      if (!cancelled) setCatalogLoadFailed(true);
+    }).finally(() => {
+      if (!cancelled) setCatalogLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, [routeCatalogSourceId, isEdit]);
 
   const namedUnits = units.filter(unit => unit.unit_name.trim());
   const hierarchyInputs = namedUnits.map(unit => ({ unit_name: unit.unit_name.trim(), parent_unit_name: unit.parent_unit_name, quantity_per_parent: Number(unit.quantity_per_parent) }));
@@ -122,11 +172,16 @@ export default function AddProductScreen() {
       return;
     }
     setInventoryUnit(nextUnit);
+    if (isCatalogImport && catalogUnitReviewRequired) setCatalogUnitReviewConfirmed(false);
     if (!isEdit) setOpeningUnit(nextUnit);
     setUnits(prev => prev.map(unit => unit.parent_unit_name === inventoryUnit ? { ...unit, parent_unit_name: nextUnit } : unit));
   };
 
   const handleSave = () => {
+    if (isCatalogImport && (!catalogItemReady || catalogLoadFailed)) { showAlert('تعذر تحميل الدواء', 'ارجع إلى الكتالوج واختر الدواء مرة أخرى.'); return; }
+    if (isCatalogImport && (!Number.isFinite(openingQty) || openingQty <= 0)) { showAlert('الكمية الفعلية مطلوبة', 'أدخل الكمية الموجودة فعليًا في الصيدلية؛ لن يُنشأ صنف مخزني من الكتالوج بكمية صفر.'); return; }
+    if (isCatalogImport && purchasePrice.trim() === '') { showAlert('تكلفة الشراء مطلوبة', 'أدخل تكلفة الشراء الفعلية للدفعة حتى لا تُسجل قيمة المخزون بصفر.'); return; }
+    if (isCatalogImport && catalogUnitReviewRequired && !catalogUnitReviewConfirmed) { showAlert('راجع تحويل العبوة', 'تحقق من وحدة البيع وحجم العبوة المقترحين من المصدر، ثم أكد صحة التحويل قبل الحفظ.'); return; }
     if (!tradeName.trim()) { showAlert('تنبيه', 'أدخل الاسم التجاري للصنف'); return; }
     if (sellingPrice.trim() === '' || !Number.isFinite(Number(sellingPrice)) || Number(sellingPrice) < 0) { showAlert('سعر غير صحيح', 'أدخل سعر بيع صحيحًا لا يقل عن صفر.'); return; }
     if (purchasePrice.trim() !== '' && (!Number.isFinite(Number(purchasePrice)) || Number(purchasePrice) < 0)) { showAlert('تكلفة غير صحيحة', 'أدخل سعر شراء صحيحًا لا يقل عن صفر.'); return; }
@@ -163,6 +218,7 @@ export default function AddProductScreen() {
       controlled,
       active: true,
       notes: notes.trim() || null,
+      catalog_source_id: catalogSourceId,
     };
 
     try {
@@ -171,6 +227,10 @@ export default function AddProductScreen() {
         replaceProductUnits(parseInt(id!), normalizedUnits());
         showAlert('تم', 'تم تحديث الصنف', [{ text: 'موافق', onPress: () => router.back() }]);
       } else {
+        if (catalogSourceId && getProductByCatalogSourceId(catalogSourceId)) {
+          showAlert('الصنف موجود بالفعل', 'هذا الدواء مرتبط مسبقًا بمنتج في صيدليتك. افتحه من المخزون بدل إنشاء نسخة مكررة.');
+          return;
+        }
         const product = addProduct(data);
         replaceProductUnits(product.id, normalizedUnits());
         if (openingQty > 0) {
@@ -178,7 +238,7 @@ export default function AddProductScreen() {
             unit_cost: effectiveOpeningCost, batch_number: openingBatch, expiry_date: openingExpiry });
           if (!opening.success) { showAlert('تم إنشاء الدواء مع خطأ في الرصيد الافتتاحي', opening.error); return; }
         }
-        showAlert('تم', openingQty > 0 ? `تم إضافة الصنف وتسجيل الرصيد الافتتاحي (${openingQty} ${openingUnit})` : 'تم إضافة الصنف', [{ text: 'موافق', onPress: () => router.back() }]);
+        showAlert('تم', openingQty > 0 ? `${isCatalogImport ? 'تمت إضافة الدواء من الكتالوج' : 'تم إضافة الصنف'} وتسجيل الرصيد الافتتاحي (${openingQty} ${openingUnit})` : 'تم إضافة الصنف', [{ text: 'موافق', onPress: () => router.back() }]);
       }
     } catch (e: any) {
       showAlert('خطأ', e?.message || AR.errorSave);
@@ -201,7 +261,7 @@ export default function AddProductScreen() {
         <TouchableOpacity onPress={handleSave} style={{ backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 8, paddingHorizontal: 14, paddingVertical: 7 }}>
           <Text style={{ color: '#FFFFFF', fontSize: 14, fontWeight: '700' }}>حفظ</Text>
         </TouchableOpacity>
-        <Text style={{ fontSize: 17, fontWeight: '700', color: '#FFFFFF' }}>{isEdit ? 'تعديل صنف' : 'صنف جديد'}</Text>
+        <Text style={{ fontSize: 17, fontWeight: '700', color: '#FFFFFF' }}>{isEdit ? 'تعديل صنف' : isCatalogImport ? 'إضافة من الكتالوج' : 'صنف جديد'}</Text>
         <TouchableOpacity onPress={() => router.back()}>
           <MaterialIcons name="close" size={22} color="#FFFFFF" />
         </TouchableOpacity>
@@ -209,6 +269,13 @@ export default function AddProductScreen() {
 
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: 14, paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
+
+          {isCatalogImport && (
+            <View style={{ backgroundColor: theme.colors.surfaceAlt, borderColor: theme.colors.primary, borderWidth: 1, borderRadius: 10, padding: 11, marginBottom: 4 }}>
+              <Text style={{ color: theme.colors.textPrimary, fontSize: 13, fontWeight: '700', textAlign: 'right' }}>{catalogLoading ? 'تحميل بيانات الكتالوج…' : catalogLoadFailed ? 'تعذر تحميل سجل الكتالوج' : catalogItemReady ? 'دواء مختار من الكتالوج المشترك' : 'جارٍ تجهيز بيانات الدواء'}</Text>
+              <Text style={{ color: theme.colors.textSecondary, fontSize: 11, textAlign: 'right', marginTop: 4 }}>الاسم والبيانات الوصفية فقط. أدخل أسعار صيدليتك والرصيد والدفعة الفعلية؛ لا يُنسخ أي سعر أو مخزون من الملف.</Text>
+            </View>
+          )}
 
           {sectionTitle('المعلومات الأساسية')}
           <Text style={labelStyle}>الاسم التجاري *</Text>
@@ -282,6 +349,12 @@ export default function AddProductScreen() {
           <Text style={{ fontSize: 11, color: theme.colors.textTertiary, textAlign: 'right', marginBottom: 8 }}>
             عرّف النسبة إلى وحدة أصغر، وسيحسب التطبيق المكافئ إلى {inventoryUnit} تلقائيًا. اترك السعر فارغًا لاشتقاقه من سعر الوحدة الأساسية.
           </Text>
+          {isCatalogImport && catalogUnitReviewRequired && (
+            <View style={{ backgroundColor: theme.colors.surfaceAlt, borderRadius: 8, padding: 9, marginBottom: 9, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+              <Switch value={catalogUnitReviewConfirmed} onValueChange={setCatalogUnitReviewConfirmed} trackColor={{ true: theme.colors.primary }} />
+              <Text style={{ flex: 1, color: theme.colors.textSecondary, fontSize: 11, textAlign: 'right', marginRight: 8 }}>أؤكد أنني راجعت وحدة البيع ومعامل العبوة المقترحين من المصدر.</Text>
+            </View>
+          )}
           {units.map((unit, index) => (
             <View key={`${index}-${unit.unit_name}`} style={{ backgroundColor: theme.colors.surfaceAlt, borderRadius: 9, padding: 9, marginBottom: 8 }}>
               <View style={{ flexDirection: 'row', gap: 7, alignItems: 'center' }}>

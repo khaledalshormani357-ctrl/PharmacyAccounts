@@ -6,11 +6,10 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { useTheme } from '@/contexts/ThemeContext';
 import { getDashboardKpis, DashboardKpis, getSetting, Sale } from '@/services/database';
-import { formatCurrency, formatDateTime, getToday, AR } from '@/constants/i18n';
+import { formatCurrency, AR } from '@/constants/i18n';
 
 interface KpiBoxProps {
   label: string; value: number; icon: any; color: string;
@@ -54,6 +53,7 @@ const QUICK_ACTIONS = [
   { label: AR.addExpense, icon: 'money-off' as const, color: '#DE350B', route: '/add-expense' },
   { label: AR.addPurchase, icon: 'shopping-cart' as const, color: '#6554C0', route: '/add-purchase' },
   { label: AR.newProduct, icon: 'medication' as const, color: '#00B8D9', route: '/add-product' },
+  { label: 'كتالوج الأدوية', icon: 'library-books' as const, color: '#006B5B', route: '/drug-catalog' },
 ];
 
 function SaleRow({ sale, theme }: { sale: Sale; theme: any }) {

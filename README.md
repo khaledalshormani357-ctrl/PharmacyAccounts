@@ -56,6 +56,12 @@ For a full list of dependencies, see [package.json](./package.json).
 
 Password reset emails return to the app using `pharmacyaccounts://reset-password`. Add this exact URL to the Supabase project's **Authentication → URL Configuration → Redirect URLs** allow list. The app's `pharmacyaccounts` scheme is configured in `app.json`; the dashboard allow-list is a one-time project setting outside this repository.
 
+## Shared Drug Reference Catalog
+
+The shared catalog is stored in `public.drug_catalog`, separate from pharmacy-owned `public.products` and local opening-stock/batch data. The table is read-only through the app for authenticated users; browsing or searching it never creates inventory. The app downloads catalog pages from Supabase and saves a device-local cache, so it works offline after the first successful sync. A new install needs connectivity for that first sync.
+
+The supplied source is transformed by `python3 scripts/build-drug-catalog.py <source-zip>`. It selects only the normalized/modified trade-name fields (`trade_name_ar` and `trade_name_en`) and omits source-original names, prices, stock thresholds, quantities, dosing instructions, and indications. The current Supabase catalog contains 4,048 records. Generated JSON/CSV files are intentionally git-ignored because this GitHub repository is public; the reference data remains in Supabase and authenticated app caches. Adding an item requires a deliberate action and locally entered sale price, purchase cost, and positive actual opening quantity. Source packaging conversions are suggestions and require confirmation before saving.
+
 ## Development Tools
 
 - TypeScript: ~5.8.3

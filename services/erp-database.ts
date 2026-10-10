@@ -74,6 +74,8 @@ export interface Product {
   default_purchase_price: number;
   active: boolean;
   notes: string | null;
+  /** Optional reference-catalog ID; not a stock quantity or inventory source. */
+  catalog_source_id?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -777,6 +779,10 @@ export function getProduct(id: number): Product | null {
 
 export function getProductByBarcode(barcode: string): Product | null {
   return store.products.find(p => p.barcode === barcode) ?? null;
+}
+
+export function getProductByCatalogSourceId(sourceId: string): Product | null {
+  return store.products.find(p => p.catalog_source_id === sourceId) ?? null;
 }
 
 export function addProduct(data: Omit<Product, 'id' | 'created_at' | 'updated_at'>): Product {
