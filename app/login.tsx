@@ -18,7 +18,8 @@ import * as Linking from 'expo-linking';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { getSharedSupabaseClient } from '@/template/core/client';
-import { useAuth } from '@/template';
+import { isValidLoginIdentifier, normalizeLoginIdentifier } from '@/services/username-login-utils';
+import { signInWithUsername } from '@/services/username-login';
 import { clearBiometricLogin, getBiometricCredentials, getBiometricLoginStatus, saveBiometricLogin } from '@/services/biometric-login';
 
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -27,18 +28,19 @@ type BusyAction = 'login' | 'biometric' | 'forgot' | null;
 
 function friendlyAuthError(message: string): string {
   const normalized = message.toLowerCase();
-  if (normalized.includes('invalid login credentials')) return 'البريد الإلكتروني أو كلمة المرور غير صحيحة.';
-  if (normalized.includes('email not confirmed')) return 'يرجى تأكيد البريد الإلكتروني أولًا من رسالة التفعيل.';
+  if (normalized.includes('invalid_credentials') || normalized.includes('invalid login credentials')) return 'اسم المستخدم أو كلمة المرور غير صحيحة.';
+  if (normalized.includes('rate_limited') || normalized.includes('too many requests')) return 'تجاوزت عدد محاولات الدخول. انتظر 15 دقيقة ثم أعد المحاولة.';
+  if (normalized.includes('function_not_deployed')) return 'خدمة الدخول باسم المستخدم غير مفعلة بعد. حدّث التطبيق أو أبلغ مسؤول النظام.';
+  if (normalized.includes('email not confirmed')) return 'الحساب غير مؤكد في Supabase؛ اطلب من المسؤول تأكيده.';
+  if (normalized.includes('service_unavailable') || normalized.includes('session_error') || normalized.includes('invalid_response')) return 'خدمة الدخول غير جاهزة مؤقتًا. حاول لاحقًا أو أبلغ المسؤول.';
   if (normalized.includes('network') || normalized.includes('timeout') || normalized.includes('fetch')) return 'تعذر الاتصال بالخادم. تحقق من الإنترنت ثم أعد المحاولة.';
-  if (normalized.includes('too many requests')) return 'تجاوزت عدد المحاولات المسموح. انتظر قليلًا ثم أعد المحاولة.';
-  return 'تعذر تسجيل الدخول. تحقق من البيانات أو حاول مرة أخرى.';
+  return 'تعذر تسجيل الدخول. تحقق من اسم المستخدم وكلمة المرور ثم حاول مرة أخرى.';
 }
 
 export default function LoginScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { signInWithPassword } = useAuth();
-  const [email, setEmail] = useState('');
+  const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [passwordVisible, setPasswordVisible] = useState(false);
   const [busy, setBusy] = useState<BusyAction>(null);
@@ -48,6 +50,9 @@ export default function LoginScreen() {
   const [biometricEnabled, setBiometricEnabled] = useState(false);
   const [enableBiometricAfterLogin, setEnableBiometricAfterLogin] = useState(false);
   const [helpVisible, setHelpVisible] = useState(false);
+  const [recoveryVisible, setRecoveryVisible] = useState(false);
+  const [recoveryEmail, setRecoveryEmail] = useState('');
+  const [recoveryError, setRecoveryError] = useState('');
 
   useEffect(() => {
     let mounted = true;
@@ -60,18 +65,18 @@ export default function LoginScreen() {
     return () => { mounted = false; };
   }, []);
 
-  const validateEmail = () => {
-    const value = email.trim();
-    if (!emailPattern.test(value)) {
-      setError('أدخل البريد الإلكتروني المرتبط بحسابك بصيغة صحيحة.');
+  const validateLoginIdentifier = () => {
+    const value = normalizeLoginIdentifier(username);
+    if (!isValidLoginIdentifier(value)) {
+      setError('أدخل اسم مستخدم صحيحًا (3 أحرف على الأقل).');
       setNotice('');
       return null;
     }
     return value;
   };
 
-  const finishSignIn = async (loginEmail: string, loginPassword: string, fromBiometric = false) => {
-    const result = await signInWithPassword(loginEmail, loginPassword);
+  const finishSignIn = async (loginUsername: string, loginPassword: string, fromBiometric = false) => {
+    const result = await signInWithUsername(loginUsername, loginPassword);
     if (result.error) {
       setError(friendlyAuthError(result.error));
       setNotice('');
@@ -85,7 +90,7 @@ export default function LoginScreen() {
 
     if (!fromBiometric && enableBiometricAfterLogin && biometricAvailable) {
       try {
-        await saveBiometricLogin({ email: loginEmail, password: loginPassword });
+        await saveBiometricLogin({ username: loginUsername, password: loginPassword });
         setBiometricEnabled(true);
       } catch {
         await clearBiometricLogin();
@@ -102,8 +107,8 @@ export default function LoginScreen() {
   };
 
   const handleLogin = async () => {
-    const loginEmail = validateEmail();
-    if (!loginEmail) return;
+    const loginUsername = validateLoginIdentifier();
+    if (!loginUsername) return;
     if (!password) {
       setError('أدخل كلمة المرور.');
       setNotice('');
@@ -113,7 +118,7 @@ export default function LoginScreen() {
     setError('');
     setNotice('');
     try {
-      await finishSignIn(loginEmail, password);
+      await finishSignIn(loginUsername, password);
     } catch {
       setError('تعذر الاتصال بالخادم. تحقق من الإنترنت والبيانات ثم أعد المحاولة.');
     } finally {
@@ -129,7 +134,7 @@ export default function LoginScreen() {
       return;
     }
     if (!biometricEnabled) {
-      setError('سجّل الدخول بالبريد وكلمة المرور أولًا، ثم فعّل خيار الدخول بالبصمة على هذا الجهاز.');
+      setError('سجّل الدخول باسم المستخدم وكلمة المرور أولًا، ثم فعّل خيار الدخول بالبصمة على هذا الجهاز.');
       return;
     }
     setBusy('biometric');
@@ -142,8 +147,8 @@ export default function LoginScreen() {
         setError('بيانات الدخول بالبصمة غير متاحة. سجّل الدخول يدويًا وفعّلها من جديد.');
         return;
       }
-      setEmail(credentials.email);
-      await finishSignIn(credentials.email, credentials.password, true);
+      setUsername(credentials.username);
+      await finishSignIn(credentials.username, credentials.password, true);
     } catch (cause) {
       const message = cause instanceof Error ? cause.message.toLowerCase() : '';
       setError(message.includes('cancel') ? 'تم إلغاء التحقق بالبصمة.' : 'تعذر التحقق بالبصمة. جرّب الدخول بكلمة المرور.');
@@ -152,19 +157,28 @@ export default function LoginScreen() {
     }
   };
 
-  const handleForgotPassword = async () => {
-    const recoveryEmail = validateEmail();
-    if (!recoveryEmail) return;
+  const handleForgotPassword = () => {
+    setRecoveryEmail('');
+    setRecoveryError('');
+    setRecoveryVisible(true);
+  };
+
+  const submitPasswordRecovery = async () => {
+    const email = recoveryEmail.trim();
+    if (!emailPattern.test(email)) {
+      setRecoveryError('أدخل البريد الإلكتروني المسجل بالحساب بصيغة صحيحة.');
+      return;
+    }
     setBusy('forgot');
-    setError('');
-    setNotice('');
+    setRecoveryError('');
     try {
       const redirectTo = Linking.createURL('reset-password');
-      const { error: resetError } = await getSharedSupabaseClient().auth.resetPasswordForEmail(recoveryEmail, { redirectTo });
+      const { error: resetError } = await getSharedSupabaseClient().auth.resetPasswordForEmail(email, { redirectTo });
       if (resetError) throw resetError;
+      setRecoveryVisible(false);
       setNotice('إذا كان البريد مسجلًا، فستصلك رسالة تحتوي على رابط آمن لإعادة تعيين كلمة المرور.');
     } catch {
-      setError('تعذر إرسال رابط الاستعادة الآن. تحقق من الاتصال وحاول مجددًا.');
+      setRecoveryError('تعذر إرسال رابط الاستعادة الآن. تحقق من الاتصال وحاول مجددًا.');
     } finally {
       setBusy(null);
     }
@@ -192,21 +206,21 @@ export default function LoginScreen() {
               </Text>
             </View>
 
-            <Text style={styles.fieldLabel}>البريد الإلكتروني</Text>
+            <Text style={styles.fieldLabel}>اسم المستخدم</Text>
             <View style={styles.field}>
               <MaterialIcons name="person-outline" size={23} color="#7B8796" />
               <TextInput
-                value={email}
-                onChangeText={value => { setEmail(value); setError(''); setNotice(''); }}
-                placeholder="name@example.com"
+                value={username}
+                onChangeText={value => { setUsername(value); setError(''); setNotice(''); }}
+                placeholder="أدخل اسم المستخدم"
                 placeholderTextColor="#9AA4B2"
-                keyboardType="email-address"
+                keyboardType="default"
                 autoCapitalize="none"
                 autoCorrect={false}
-                autoComplete="email"
-                textContentType="emailAddress"
+                autoComplete="username"
+                textContentType="username"
                 returnKeyType="next"
-                accessibilityLabel="البريد الإلكتروني"
+                accessibilityLabel="اسم المستخدم"
                 style={styles.textInput}
               />
             </View>
@@ -297,6 +311,44 @@ export default function LoginScreen() {
         <MaterialIcons name="smart-toy" size={29} color="#FFFFFF" />
       </TouchableOpacity>
 
+      <Modal visible={recoveryVisible} transparent animationType="fade" onRequestClose={() => setRecoveryVisible(false)}>
+        <View style={{ flex: 1, backgroundColor: 'rgba(11,24,43,0.42)', justifyContent: 'center', padding: 18 }}>
+          <View style={{ width: '100%', maxWidth: 470, alignSelf: 'center', backgroundColor: '#FFFFFF', borderRadius: 24, padding: 22 }}>
+            <View style={{ flexDirection: 'row-reverse', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+              <Text style={{ color: '#17437F', fontSize: 18, fontWeight: '800' }}>استعادة كلمة المرور</Text>
+              <TouchableOpacity onPress={() => setRecoveryVisible(false)} accessibilityLabel="إغلاق استعادة كلمة المرور">
+                <MaterialIcons name="close" size={22} color="#7B8796" />
+              </TouchableOpacity>
+            </View>
+            <Text style={{ color: '#596779', fontSize: 14, lineHeight: 22, textAlign: 'right', marginBottom: 14 }}>
+              أدخل البريد الإلكتروني المسجل بالحساب لإرسال رابط تغيير كلمة المرور. البريد لا يُستخدم لتسجيل الدخول.
+            </Text>
+            <TextInput
+              value={recoveryEmail}
+              onChangeText={value => { setRecoveryEmail(value); setRecoveryError(''); }}
+              placeholder="name@example.com"
+              placeholderTextColor="#9AA4B2"
+              keyboardType="email-address"
+              autoCapitalize="none"
+              autoCorrect={false}
+              autoComplete="email"
+              textContentType="emailAddress"
+              accessibilityLabel="البريد الإلكتروني لاستعادة كلمة المرور"
+              style={[styles.textInput, { minHeight: 52, borderWidth: 1, borderColor: '#DCE3EC', borderRadius: 14, paddingHorizontal: 13, textAlign: 'left', writingDirection: 'ltr', marginBottom: 10 }]}
+            />
+            {!!recoveryError && <Text accessibilityRole="alert" style={{ color: '#B83340', fontSize: 13, lineHeight: 20, textAlign: 'right', marginBottom: 10 }}>{recoveryError}</Text>}
+            <View style={{ flexDirection: 'row-reverse', gap: 10, marginTop: 4 }}>
+              <TouchableOpacity onPress={submitPasswordRecovery} disabled={isBusy} accessibilityRole="button" style={{ flex: 1, minHeight: 48, borderRadius: 14, backgroundColor: '#2476E8', alignItems: 'center', justifyContent: 'center', opacity: isBusy ? 0.7 : 1 }}>
+                {busy === 'forgot' ? <ActivityIndicator color="#FFFFFF" /> : <Text style={{ color: '#FFFFFF', fontWeight: '700', fontSize: 14 }}>إرسال الرابط</Text>}
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => setRecoveryVisible(false)} disabled={isBusy} accessibilityRole="button" style={{ flex: 1, minHeight: 48, borderRadius: 14, borderWidth: 1, borderColor: '#DCE3EC', alignItems: 'center', justifyContent: 'center' }}>
+                <Text style={{ color: '#526174', fontWeight: '700', fontSize: 14 }}>إلغاء</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       <Modal visible={helpVisible} transparent animationType="fade" onRequestClose={() => setHelpVisible(false)}>
         <View style={{ flex: 1, backgroundColor: 'rgba(11,24,43,0.42)', justifyContent: 'flex-end', padding: 16 }}>
           <View style={{ width: '100%', maxWidth: 500, alignSelf: 'center', backgroundColor: '#FFFFFF', borderRadius: 24, padding: 22, marginBottom: Math.max(10, insets.bottom) }}>
@@ -312,7 +364,7 @@ export default function LoginScreen() {
               </TouchableOpacity>
             </View>
             <Text style={{ color: '#596779', fontSize: 14, lineHeight: 23, textAlign: 'right' }}>
-              استخدم البريد الإلكتروني المسجل لدى مسؤول النظام. إذا نسيت كلمة المرور، أدخل بريدك ثم اضغط «نسيت كلمة المرور؟». للدخول بالبصمة، سجّل الدخول مرة واحدة وفعّل الخيار على هذا الجهاز.
+              استخدم اسم المستخدم الذي حدده مسؤول النظام. إذا لم يُعيَّن اسم مستقل، يكون اسم المستخدم افتراضيًا الجزء الذي يسبق @ في البريد المسجل. استعادة كلمة المرور تتطلب البريد المسجل. للدخول بالبصمة، سجّل الدخول مرة واحدة وفعّل الخيار على هذا الجهاز.
             </Text>
             <TouchableOpacity onPress={() => setHelpVisible(false)} style={{ marginTop: 18, height: 48, borderRadius: 14, backgroundColor: '#2476E8', alignItems: 'center', justifyContent: 'center' }}>
               <Text style={{ color: '#FFFFFF', fontWeight: '700', fontSize: 15 }}>حسنًا</Text>

@@ -16,6 +16,8 @@
     "services/erp-database.ts",
     "services/customer-invoice.ts",
     "services/return-invoice.ts",
-    "services/drug-catalog-utils.ts"
+    "services/drug-catalog-utils.ts",
+    "services/username-login-utils.ts",
+    "supabase/functions/username-login/login-utils.ts"
   ]
 }

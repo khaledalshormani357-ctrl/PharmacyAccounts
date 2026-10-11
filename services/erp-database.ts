@@ -370,11 +370,22 @@ export interface SupplierTransaction {
 }
 
 // ─── Cashbox ──────────────────────────────────────────────
+export type CashboxId = 'daily' | 'pharmacy' | 'bank';
+export interface CashboxDefinition { id: CashboxId; label: string; shortLabel: string; }
+export const CASHBOXES: readonly CashboxDefinition[] = [
+  { id: 'daily', label: 'صندوق اليومية', shortLabel: 'اليومية' },
+  { id: 'pharmacy', label: 'صندوق الصيدلية', shortLabel: 'الصيدلية' },
+  { id: 'bank', label: 'صندوق الصراف / البنك', shortLabel: 'الصراف / البنك' },
+];
+
 export interface CashTransaction {
   id: number;
   type: 'SALE_CASH' | 'COLLECTION' | 'PURCHASE_PAYMENT' | 'SUPPLIER_PAYMENT'
-      | 'CUSTOMER_REFUND' | 'PURCHASE_RETURN' | 'EXPENSE' | 'WITHDRAWAL' | 'DEPOSIT' | 'OPENING' | 'CLOSING' | 'ADJUSTMENT';
+      | 'CUSTOMER_REFUND' | 'PURCHASE_RETURN' | 'EXPENSE' | 'WITHDRAWAL' | 'DEPOSIT' | 'OPENING' | 'CLOSING' | 'ADJUSTMENT'
+      | 'RECEIPT' | 'PAYMENT' | 'TRANSFER_IN' | 'TRANSFER_OUT';
   amount: number;         // positive = in, negative = out
+  /** Missing on legacy records; those are treated as daily-cashbox transactions. */
+  cashbox_id?: CashboxId;
   reference_type: string | null;
   reference_id: number | null;
   shift_id: number | null;
@@ -413,6 +424,7 @@ export interface Expense {
   shift_id: number | null;
   note: string | null;
   user_id: number | null;
+  cashbox_id?: CashboxId;
   created_at: string;
 }
 
@@ -957,6 +969,7 @@ export function addOpeningBalance(amount: number, note = 'رصيد افتتاح�
   if (!Number.isFinite(amount) || amount <= 0) return false;
   store.cashTransactions.push({
     id: ids.cashTx++, type: 'OPENING', amount, reference_type: null, reference_id: null,
+    cashbox_id: 'daily',
     shift_id: null, note, user_id: user_id ?? null, date: today(), created_at: now(),
   });
   addAuditLog({ action: 'OPENING_BALANCE_ADD', entity: 'cashbox', entity_id: null,
@@ -2280,7 +2293,7 @@ export function getSupplierTransactions(supplier_id: number): SupplierTransactio
 
 export function addExpense(data: {
   category: string; amount: number; date?: string;
-  shift_id?: number | null; note?: string; user_id?: number | null;
+  shift_id?: number | null; note?: string; user_id?: number | null; cashbox_id?: CashboxId;
 }): Expense {
   const expenseDate = data.date || today();
   const expense: Expense = {
@@ -2291,6 +2304,7 @@ export function addExpense(data: {
     shift_id: data.shift_id ?? null,
     note: data.note ?? null,
     user_id: data.user_id ?? null,
+    cashbox_id: data.cashbox_id ?? 'daily',
     created_at: now(),
   };
   store.expenses.push(expense);
@@ -2299,6 +2313,7 @@ export function addExpense(data: {
     id: ids.cashTx++,
     type: 'EXPENSE',
     amount: -data.amount,
+    cashbox_id: data.cashbox_id ?? 'daily',
     reference_type: 'expense',
     reference_id: expense.id,
     shift_id: data.shift_id ?? null,
@@ -2360,50 +2375,184 @@ export function getExpensesByCategory(dateFrom: string, dateTo: string): { categ
 // CASHBOX
 // ═══════════════════════════════════════════════════════════
 
-export function getCashBalance(): number {
-  return store.cashTransactions.reduce((s, t) => s + t.amount, 0);
+export interface CashboxBalance {
+  id: CashboxId;
+  label: string;
+  shortLabel: string;
+  balance: number;
+  openingBalance: number;
+}
+
+export type CashboxMutationResult = { success: true } | { success: false; error: string };
+
+function transactionCashboxId(transaction: CashTransaction): CashboxId {
+  return transaction.cashbox_id ?? 'daily';
+}
+
+function appendCashboxTransaction(data: {
+  type: CashTransaction['type']; amount: number; cashbox_id: CashboxId; note: string;
+  user_id?: number; reference_type?: string | null; reference_id?: number | null; shift_id?: number | null;
+}): CashTransaction {
+  const transaction: CashTransaction = {
+    id: ids.cashTx++, type: data.type, amount: data.amount, cashbox_id: data.cashbox_id,
+    reference_type: data.reference_type ?? null, reference_id: data.reference_id ?? null,
+    shift_id: data.shift_id ?? null, note: data.note, user_id: data.user_id ?? null,
+    date: today(), created_at: now(),
+  };
+  store.cashTransactions.push(transaction);
+  return transaction;
+}
+
+/** With no id this retains the legacy behavior and returns the sum of every cashbox. */
+export function getCashBalance(cashboxId?: CashboxId): number {
+  return store.cashTransactions
+    .filter(transaction => cashboxId === undefined || transactionCashboxId(transaction) === cashboxId)
+    .reduce((sum, transaction) => sum + transaction.amount, 0);
+}
+
+export function getCashboxOpeningBalance(cashboxId: CashboxId): number {
+  return store.cashTransactions
+    .filter(transaction => transaction.type === 'OPENING' && transactionCashboxId(transaction) === cashboxId)
+    .reduce((sum, transaction) => sum + transaction.amount, 0);
+}
+
+export function getCashboxBalances(): CashboxBalance[] {
+  return CASHBOXES.map(box => ({
+    ...box,
+    balance: getCashBalance(box.id),
+    openingBalance: getCashboxOpeningBalance(box.id),
+  }));
 }
 
 export function getCashTransactions(opts?: {
   dateFrom?: string; dateTo?: string; type?: string; limit?: number;
+  cashboxId?: CashboxId; direction?: 'in' | 'out'; search?: string;
 }): CashTransaction[] {
   let result = [...store.cashTransactions];
-  if (opts?.dateFrom) result = result.filter(t => t.date >= opts.dateFrom!);
-  if (opts?.dateTo) result = result.filter(t => t.date <= opts.dateTo!);
-  if (opts?.type) result = result.filter(t => t.type === opts.type);
+  if (opts?.dateFrom) result = result.filter(transaction => transaction.date >= opts.dateFrom!);
+  if (opts?.dateTo) result = result.filter(transaction => transaction.date <= opts.dateTo!);
+  if (opts?.type) result = result.filter(transaction => transaction.type === opts.type);
+  if (opts?.cashboxId) result = result.filter(transaction => transactionCashboxId(transaction) === opts.cashboxId);
+  if (opts?.direction === 'in') result = result.filter(transaction => transaction.amount > 0);
+  if (opts?.direction === 'out') result = result.filter(transaction => transaction.amount < 0);
+  if (opts?.search?.trim()) {
+    const query = opts.search.trim().toLocaleLowerCase('ar');
+    result = result.filter(transaction => [
+      transaction.id, transaction.reference_id ?? '', transaction.note ?? '', transaction.type,
+      CASHBOXES.find(box => box.id === transactionCashboxId(transaction))?.label ?? '',
+    ].some(value => String(value).toLocaleLowerCase('ar').includes(query)));
+  }
   result.sort((a, b) => b.created_at.localeCompare(a.created_at));
   if (opts?.limit) result = result.slice(0, opts.limit);
   return result;
 }
 
-export function addCashDeposit(amount: number, note: string, user_id?: number): void {
-  store.cashTransactions.push({
-    id: ids.cashTx++,
-    type: 'DEPOSIT',
-    amount,
-    reference_type: null,
-    reference_id: null,
-    shift_id: null,
-    note,
-    user_id: user_id ?? null,
-    date: today(),
-    created_at: now(),
-  });
+export function addCashDeposit(amount: number, note: string, user_id?: number, cashboxId: CashboxId = 'daily'): void {
+  if (!Number.isFinite(amount) || amount <= 0) return;
+  appendCashboxTransaction({ type: 'DEPOSIT', amount, cashbox_id: cashboxId, note, user_id });
+  persistStore();
 }
 
-export function addCashWithdrawal(amount: number, note: string, user_id?: number): void {
-  store.cashTransactions.push({
-    id: ids.cashTx++,
-    type: 'WITHDRAWAL',
-    amount: -amount,
-    reference_type: null,
-    reference_id: null,
-    shift_id: null,
-    note,
-    user_id: user_id ?? null,
-    date: today(),
-    created_at: now(),
+export function addCashWithdrawal(amount: number, note: string, user_id?: number, cashboxId: CashboxId = 'daily'): void {
+  if (!Number.isFinite(amount) || amount <= 0) return;
+  appendCashboxTransaction({ type: 'WITHDRAWAL', amount: -amount, cashbox_id: cashboxId, note, user_id });
+  persistStore();
+}
+
+export function addCashboxOpeningBalance(amount: number, cashboxId: CashboxId, note: string, user_id?: number): CashboxMutationResult {
+  if (!Number.isFinite(amount) || amount <= 0) return { success: false, error: 'أدخل رصيدًا افتتاحيًا أكبر من صفر.' };
+  const alreadyHasActivity = store.cashTransactions.some(transaction =>
+    transaction.amount !== 0 && transactionCashboxId(transaction) === cashboxId,
+  );
+  if (alreadyHasActivity) return { success: false, error: 'يسجل الرصيد الافتتاحي قبل أول حركة فقط. استخدم سند قبض أو سند صرف لإضافة حركة لاحقة.' };
+  appendCashboxTransaction({ type: 'OPENING', amount, cashbox_id: cashboxId, note, user_id });
+  addAuditLog({ action: 'CASHBOX_OPENING_BALANCE', entity: 'cashbox', entity_id: null,
+    after_data: JSON.stringify({ cashboxId, amount, note }) });
+  persistStore();
+  return { success: true };
+}
+
+export function addCashboxReceipt(amount: number, cashboxId: CashboxId, note: string, user_id?: number): CashboxMutationResult {
+  if (!Number.isFinite(amount) || amount <= 0) return { success: false, error: 'أدخل مبلغ سند قبض صحيحًا.' };
+  const transaction = appendCashboxTransaction({
+    type: 'RECEIPT', amount, cashbox_id: cashboxId, note, user_id, reference_type: 'cash_receipt',
   });
+  addAuditLog({ action: 'CASHBOX_RECEIPT', entity: 'cashbox', entity_id: transaction.id,
+    after_data: JSON.stringify({ cashboxId, amount, note }) });
+  persistStore();
+  return { success: true };
+}
+
+export function addCashboxPayment(amount: number, cashboxId: CashboxId, note: string, user_id?: number): CashboxMutationResult {
+  if (!Number.isFinite(amount) || amount <= 0) return { success: false, error: 'أدخل مبلغ سند صرف صحيحًا.' };
+  if (getCashBalance(cashboxId) < amount) return { success: false, error: 'رصيد الصندوق المحدد لا يكفي لهذا الصرف.' };
+  const transaction = appendCashboxTransaction({
+    type: 'PAYMENT', amount: -amount, cashbox_id: cashboxId, note, user_id, reference_type: 'cash_payment',
+  });
+  addAuditLog({ action: 'CASHBOX_PAYMENT', entity: 'cashbox', entity_id: transaction.id,
+    after_data: JSON.stringify({ cashboxId, amount, note }) });
+  persistStore();
+  return { success: true };
+}
+
+export function transferCashBetweenBoxes(
+  sourceId: CashboxId, destinationId: CashboxId, amount: number, note: string, user_id?: number,
+): CashboxMutationResult {
+  if (sourceId === destinationId) return { success: false, error: 'اختر صندوقين مختلفين للتحويل.' };
+  if (!Number.isFinite(amount) || amount <= 0) return { success: false, error: 'أدخل مبلغ تحويل صحيحًا.' };
+  if (getCashBalance(sourceId) < amount) return { success: false, error: 'الرصيد المتاح في الصندوق المصدر لا يكفي.' };
+  try {
+    return commitReturnAtomically(() => {
+      const transferReference = ids.cashTx;
+      const source = CASHBOXES.find(box => box.id === sourceId)!.label;
+      const destination = CASHBOXES.find(box => box.id === destinationId)!.label;
+      appendCashboxTransaction({
+        type: 'TRANSFER_OUT', amount: -amount, cashbox_id: sourceId, note: `تحويل إلى ${destination}${note ? ` — ${note}` : ''}`,
+        user_id, reference_type: 'cash_transfer', reference_id: transferReference,
+      });
+      appendCashboxTransaction({
+        type: 'TRANSFER_IN', amount, cashbox_id: destinationId, note: `تحويل من ${source}${note ? ` — ${note}` : ''}`,
+        user_id, reference_type: 'cash_transfer', reference_id: transferReference,
+      });
+      addAuditLog({ action: 'CASHBOX_TRANSFER', entity: 'cashbox', entity_id: transferReference,
+        after_data: JSON.stringify({ sourceId, destinationId, amount, note }) });
+      persistStore();
+      return { success: true };
+    });
+  } catch {
+    return { success: false, error: 'تعذر تسجيل التحويل؛ لم يتغير رصيد أي صندوق.' };
+  }
+}
+
+export type CashboxCloseResult =
+  | { success: true; expectedCash: number; actualCash: number; difference: number; shiftClosed: boolean }
+  | { success: false; error: string };
+
+/** Stores a zero-value closing snapshot; cash is not silently adjusted to the counted amount. */
+export function closeCashboxDay(actualCash: number, note = '', user_id?: number): CashboxCloseResult {
+  if (!Number.isFinite(actualCash) || actualCash < 0) return { success: false, error: 'أدخل رصيدًا فعليًا صحيحًا لا يقل عن صفر.' };
+  const expectedCash = getCashBalance('daily');
+  try {
+    return commitReturnAtomically(() => {
+      const activeShift = getOpenShift();
+      if (activeShift && !closeShift(activeShift.id, actualCash, note || undefined)) {
+        throw new Error('تعذر إقفال الوردية المفتوحة.');
+      }
+      const difference = actualCash - expectedCash;
+      appendCashboxTransaction({
+        type: 'CLOSING', amount: 0, cashbox_id: 'daily',
+        note: `إقفال صندوق اليومية — المتوقع ${expectedCash}، الفعلي ${actualCash}، الفرق ${difference}${note ? ` — ${note}` : ''}`,
+        user_id, reference_type: 'cashbox_close', reference_id: activeShift?.id ?? null,
+        shift_id: activeShift?.id ?? null,
+      });
+      addAuditLog({ action: 'CASHBOX_DAILY_CLOSE', entity: 'cashbox', entity_id: activeShift?.id ?? null,
+        after_data: JSON.stringify({ expectedCash, actualCash, difference, note, shiftClosed: Boolean(activeShift) }) });
+      persistStore();
+      return { success: true, expectedCash, actualCash, difference, shiftClosed: Boolean(activeShift) };
+    });
+  } catch {
+    return { success: false, error: 'تعذر حفظ الإقفال؛ لم يتغير رصيد الصندوق.' };
+  }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -2437,6 +2586,7 @@ export function openShift(data: {
     id: ids.cashTx++,
     type: 'OPENING',
     amount: 0, // opening_cash already in balance
+    cashbox_id: 'daily',
     reference_type: 'shift',
     reference_id: shift.id,
     shift_id: shift.id,
@@ -2454,7 +2604,7 @@ export function closeShift(id: number, actual_cash: number, reason?: string): Sh
   if (!shift || shift.status !== 'OPEN') return null;
 
   shift.actual_cash = actual_cash;
-  shift.expected_cash = getCashBalance();
+  shift.expected_cash = getCashBalance('daily');
   shift.difference = actual_cash - shift.expected_cash;
   shift.difference_reason = reason ?? null;
   shift.status = 'CLOSED';

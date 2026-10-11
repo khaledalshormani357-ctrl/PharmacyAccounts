@@ -3,9 +3,10 @@ import React, { useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, ScrollView, KeyboardAvoidingView, Platform } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useTheme } from '@/contexts/ThemeContext';
-import { addExpense, getExpenseCategories } from '@/services/database';
+import { addExpense, CASHBOXES, getExpenseCategories } from '@/services/database';
+import type { CashboxId } from '@/services/database';
 import { getToday } from '@/constants/i18n';
 import { useAlert } from '@/template';
 
@@ -13,17 +14,21 @@ export default function AddExpenseScreen() {
   const { theme } = useTheme();
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  const params = useLocalSearchParams<{ cashboxId?: string | string[] }>();
+  const requestedCashbox = Array.isArray(params.cashboxId) ? params.cashboxId[0] : params.cashboxId;
+  const cashboxId: CashboxId = requestedCashbox === 'pharmacy' || requestedCashbox === 'bank' ? requestedCashbox : 'daily';
   const { showAlert } = useAlert();
   const [category, setCategory] = useState('أخرى');
   const [amount, setAmount] = useState('');
   const [date, setDate] = useState(getToday());
   const [note, setNote] = useState('');
   const categories = getExpenseCategories();
+  const cashboxLabel = CASHBOXES.find(box => box.id === cashboxId)?.label ?? 'صندوق اليومية';
 
   const handleSave = () => {
     const amt = parseFloat(amount);
     if (!amt || amt <= 0) { showAlert('تنبيه', 'أدخل مبلغاً صحيحاً'); return; }
-    addExpense({ category, amount: amt, date, note: note.trim() || undefined });
+    addExpense({ category, amount: amt, date, note: note.trim() || undefined, cashbox_id: cashboxId });
     router.back();
   };
 
@@ -38,6 +43,10 @@ export default function AddExpenseScreen() {
       </View>
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: 16 }} keyboardShouldPersistTaps="handled">
+          <View style={{ flexDirection: 'row-reverse', alignItems: 'center', gap: 8, padding: 12, borderRadius: 12, backgroundColor: theme.colors.surface, borderWidth: 1, borderColor: theme.colors.border }}>
+            <MaterialIcons name="account-balance-wallet" size={19} color={theme.colors.primary} />
+            <Text style={{ color: theme.colors.textSecondary, fontSize: 12, textAlign: 'right' }}>سيُسجّل أثر المصروف في {cashboxLabel}</Text>
+          </View>
           {/* Amount Hero */}
           <View style={{ alignItems: 'center', paddingVertical: 20 }}>
             <Text style={{ fontSize: 13, color: theme.colors.textTertiary, marginBottom: 8 }}>المبلغ</Text>

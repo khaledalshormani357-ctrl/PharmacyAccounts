@@ -10,7 +10,7 @@ const secureOptions = {
 };
 
 export interface BiometricCredentials {
-  email: string;
+  username: string;
   password: string;
 }
 
@@ -43,14 +43,17 @@ export async function saveBiometricLogin(credentials: BiometricCredentials): Pro
 export async function getBiometricCredentials(): Promise<BiometricCredentials | null> {
   const value = await SecureStore.getItemAsync(CREDENTIALS_KEY, secureOptions);
   if (!value) return null;
-  let parsed: Partial<BiometricCredentials>;
+  let parsed: { username?: unknown; email?: unknown; password?: unknown };
   try {
-    parsed = JSON.parse(value) as Partial<BiometricCredentials>;
+    parsed = JSON.parse(value) as { username?: unknown; email?: unknown; password?: unknown };
   } catch {
     return null;
   }
-  if (typeof parsed.email !== 'string' || typeof parsed.password !== 'string' || !parsed.email || !parsed.password) return null;
-  return { email: parsed.email, password: parsed.password };
+  // `email` supports credentials saved by earlier app versions. The username
+  // endpoint also accepts the full email as a compatibility identifier.
+  const username = typeof parsed.username === 'string' ? parsed.username : typeof parsed.email === 'string' ? parsed.email : '';
+  if (!username || typeof parsed.password !== 'string' || !parsed.password) return null;
+  return { username, password: parsed.password };
 }
 
 export async function clearBiometricLogin(): Promise<void> {
