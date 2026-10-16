@@ -8,7 +8,7 @@ import {
   createPurchaseReturn, createSaleReturn, getCustomer, getProduct, getPurchase,
   getPurchaseItemReturnableQuantity, getPurchaseItemReturnedQuantity, getPurchaseItems, getPurchases,
   getSale, getSaleItemReturnableQuantity, getSaleItemReturnedQuantity, getSaleItems, getSales,
-  getSupplier, Purchase, PurchaseItem, Sale, SaleItem, ReturnSettlementMethod,
+  getSupplier, Purchase, PurchaseItem, Sale, SaleItem, ReturnSettlementMethod, flushDatabaseWrites,
 } from '@/services/database';
 import { formatCurrency, formatDate } from '@/constants/i18n';
 import { useAlert } from '@/template';
