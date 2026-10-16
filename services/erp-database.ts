@@ -1570,6 +1570,7 @@ export function cancelSale(id: number, reason: string, user_id?: number): void {
 
   addAuditLog({ action: 'SALE_CANCEL', entity: 'sale', entity_id: id,
     before_data: before, reason });
+  persistStore();
 }
 
 export function getSales(opts?: {
