@@ -1333,6 +1333,8 @@ export function createSale(data: NewSale): SaleResult {
     const saleDate = data.date || today();
     if (!isValidIsoDate(saleDate)) return { success: false, error: 'تاريخ فاتورة البيع غير صحيح' };
     if (!Number.isFinite(data.amount_paid) || data.amount_paid < 0) return { success: false, error: 'المبلغ المدفوع غير صحيح' };
+    // Commit invoice, inventory, balances, cash and audit as one rollback-capable mutation.
+    return commitReturnAtomically(() => {
     // Create sale record
     const sale: Sale = {
       id: ids.sales++,
@@ -1499,6 +1501,7 @@ export function createSale(data: NewSale): SaleResult {
     });
 
     return { success: true, sale };
+    });
   } catch (e: any) {
     return { success: false, error: e?.message || 'خطأ غير متوقع' };
   }
@@ -1842,6 +1845,8 @@ export function createPurchase(data: NewPurchase): PurchaseResult {
     if (data.amount_paid > total) return { success: false, error: 'المبلغ المدفوع أكبر من إجمالي الفاتورة' };
     const remaining = total - data.amount_paid;
 
+    // Commit purchase, batch quantities, supplier balance and cash atomically.
+    return commitReturnAtomically(() => {
     const purchase: Purchase = {
       id: ids.purchases++,
       invoice_number: data.invoice_number || nextInvoice(),
@@ -1978,6 +1983,7 @@ export function createPurchase(data: NewPurchase): PurchaseResult {
     });
 
     return { success: true, purchase };
+    });
   } catch (e: any) {
     return { success: false, error: e?.message || 'خطأ غير متوقع' };
   }
