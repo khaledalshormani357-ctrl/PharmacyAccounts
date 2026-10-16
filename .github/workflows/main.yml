@@ -28,5 +28,8 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Unit and integration regression tests
+        run: pnpm run test:units
+
       - name: Lint
         run: pnpm run lint

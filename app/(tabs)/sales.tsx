@@ -9,7 +9,7 @@ import { useRouter } from 'expo-router';
 import { useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '@/contexts/ThemeContext';
-import { getSales, cancelSale, getSetting, Sale } from '@/services/database';
+import { getSales, cancelSale, getSetting, Sale, flushDatabaseWrites } from '@/services/database';
 import { formatCurrency, formatDate, getToday, AR } from '@/constants/i18n';
 import { useAlert } from '@/template';
 import { PdfActions } from '@/components/PdfActions';
@@ -104,7 +104,7 @@ export default function SalesScreen() {
   const handleCancel = (sale: Sale) => {
     showAlert(`إلغاء ${sale.invoice_number}`, 'هل تريد إلغاء هذه الفاتورة؟', [
       { text: 'لا', style: 'cancel' },
-      { text: 'إلغاء الفاتورة', style: 'destructive', onPress: () => { cancelSale(sale.id, 'إلغاء يدوي'); load(); } },
+      { text: 'إلغاء الفاتورة', style: 'destructive', onPress: async () => { try { cancelSale(sale.id, 'إلغاء يدوي'); await flushDatabaseWrites(); load(); } catch { showAlert('تعذر تأكيد الحفظ', 'تعذر تأكيد حفظ الإلغاء على الجهاز. تحقق من حالة الفاتورة.'); } } },
     ]);
   };
 

@@ -8,7 +8,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useTheme } from '@/contexts/ThemeContext';
-import { createPurchase, getProductUnits, getSuppliers, getProducts, getSetting, getUnitPrice, Supplier, Product } from '@/services/database';
+import { createPurchase, getProductUnits, getSuppliers, getProducts, getSetting, getUnitPrice, flushDatabaseWrites, Supplier, Product } from '@/services/database';
 import { formatCurrency, getToday } from '@/constants/i18n';
 import { useAlert } from '@/template';
 import { formatUnitEquivalents, isValidIsoDate, isValidUnitQuantity } from '@/services/unit-conversion';
@@ -135,12 +135,15 @@ export default function AddPurchaseScreen() {
         notes,
       });
       if (result.success) {
+        await flushDatabaseWrites();
         showAlert('تم', `تم تسجيل فاتورة الشراء ${result.purchase?.invoice_number}`, [
           { text: 'موافق', onPress: () => router.back() },
         ]);
       } else {
         showAlert('خطأ', result.error || 'فشل تسجيل الفاتورة');
       }
+    } catch {
+      showAlert('تعذر تأكيد الحفظ', 'تعذر تأكيد حفظ الفاتورة على الجهاز. تحقق من الفاتورة قبل إعادة تسجيلها.');
     } finally {
       setSaving(false);
     }

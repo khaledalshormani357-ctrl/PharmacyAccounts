@@ -5,7 +5,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams , useFocusEffect } from 'expo-router';
 import { useTheme } from '@/contexts/ThemeContext';
-import { getSale, getSaleItems, cancelSale, getSaleItemReturnableQuantity, getSaleItemReturnedQuantity, getSaleReturns, getSetting, Sale, SaleItem, SaleReturn } from '@/services/database';
+import { getSale, getSaleItems, cancelSale, getSaleItemReturnableQuantity, getSaleItemReturnedQuantity, getSaleReturns, getSetting, Sale, SaleItem, SaleReturn, flushDatabaseWrites } from '@/services/database';
 import { formatCurrency, formatDateTime } from '@/constants/i18n';
 import { useAlert } from '@/template';
 import { PdfActions } from '@/components/PdfActions';
@@ -75,7 +75,7 @@ export default function SaleDetailScreen() {
               <TouchableOpacity
                 onPress={() => showAlert('إلغاء الفاتورة', 'هل تريد إلغاء هذه الفاتورة؟', [
                   { text: 'لا', style: 'cancel' },
-                  { text: 'إلغاء', style: 'destructive', onPress: () => { cancelSale(sale.id, 'إلغاء من التفاصيل'); load(); } },
+                  { text: 'إلغاء', style: 'destructive', onPress: async () => { try { cancelSale(sale.id, 'إلغاء من التفاصيل'); await flushDatabaseWrites(); load(); } catch { showAlert('تعذر تأكيد الحفظ', 'تعذر تأكيد حفظ الإلغاء على الجهاز. تحقق من حالة الفاتورة.'); } } },
                 ])}
                 style={{ backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 5 }}
               >
