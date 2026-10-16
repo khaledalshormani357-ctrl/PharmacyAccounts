@@ -11,7 +11,7 @@ import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useTheme } from '@/contexts/ThemeContext';
 import {
   getProducts, getCustomers, createSale, getProductUnits, getUnitPrice,
-  Product, Customer, getSetting, getProductStock,
+  Product, Customer, getSetting, getProductStock, flushDatabaseWrites,
 } from '@/services/database';
 import { formatCurrency } from '@/constants/i18n';
 import { useAlert } from '@/template';
@@ -152,12 +152,15 @@ export default function PosScreen() {
       });
 
       if (result.success) {
+        await flushDatabaseWrites();
         showAlert('تم', `تم حفظ الفاتورة ${result.sale?.invoice_number}`, [
           { text: 'موافق', onPress: () => router.back() },
         ]);
       } else {
         showAlert('خطأ', result.error || 'فشل في حفظ الفاتورة');
       }
+    } catch {
+      showAlert('تعذر تأكيد الحفظ', 'لم يتم تأكيد حفظ الفاتورة على الجهاز. لا تغلق التطبيق قبل التحقق من الفاتورة.');
     } finally {
       setSaving(false);
     }
