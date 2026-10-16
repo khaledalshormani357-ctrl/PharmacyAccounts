@@ -595,6 +595,13 @@ async function hydrateStore(): Promise<void> {
   } catch {
     // A corrupt local snapshot must not prevent the app from opening.
   }
+  // Migrate the former built-in Saudi currency default to the requested Yemeni rial.
+  // Preserve any non-default currency explicitly chosen by the pharmacy.
+  if ((store.settings.currency === 'ريال سعودي' || store.settings.currency === 'ر.س') && store.settings.currency_symbol === 'ر.س') {
+    store.settings.currency = 'ريال يمني';
+    store.settings.currency_symbol = 'ر.ي';
+    persistStore();
+  }
 }
 
 function simpleHash(password: string): string {
@@ -621,8 +628,8 @@ function initDefaults() {
   const defaultSettings: Record<string, string> = {
     pharmacy_name: '',
     owner_name: '',
-    currency: 'ر.س',
-    currency_symbol: 'ر.س',
+    currency: 'ريال يمني',
+    currency_symbol: 'ر.ي',
     theme: 'light',
     pin_enabled: 'false',
     pin_code: '',
