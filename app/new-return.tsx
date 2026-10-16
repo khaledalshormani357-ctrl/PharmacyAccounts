@@ -118,7 +118,7 @@ export default function NewReturnScreen() {
     setQuantities(values);
   };
 
-  const submit = () => {
+  const submit = async () => {
     if (!selectedInvoice) { showAlert('اختر الفاتورة', 'حدد الفاتورة الأصلية أولًا.'); return; }
     const chosen = sourceItems.map(item => ({ item, quantity: Number(quantities[item.id] || 0) })).filter(row => row.quantity > 0);
     if (!chosen.length) { showAlert('لا توجد كميات', 'أدخل كمية موجبة لصنف واحد على الأقل.'); return; }
@@ -129,12 +129,18 @@ export default function NewReturnScreen() {
       }
     }
     setSaving(true);
-    const result = kind === 'sale'
-      ? createSaleReturn({ sale_id: selectedInvoice.id, items: chosen.map(row => ({ sale_item_id: row.item.id, quantity: row.quantity })), settlement_method: settlement as Extract<ReturnSettlementMethod, 'CASH_REFUND' | 'CUSTOMER_BALANCE' | 'CUSTOMER_CREDIT'>, condition, notes, idempotency_key: `${operationKey}-sale-${selectedInvoice.id}` })
-      : createPurchaseReturn({ purchase_id: selectedInvoice.id, items: chosen.map(row => ({ purchase_item_id: row.item.id, quantity: row.quantity })), settlement_method: settlement as Extract<ReturnSettlementMethod, 'CASH_REFUND' | 'SUPPLIER_BALANCE'>, notes, idempotency_key: `${operationKey}-purchase-${selectedInvoice.id}` });
-    setSaving(false);
-    if (!result.success) { showAlert('تعذر تسجيل المرتجع', result.error); return; }
-    router.replace({ pathname: '/return-detail', params: { type: kind, returnId: String(result.record.id) } } as any);
+    try {
+      const result = kind === 'sale'
+        ? createSaleReturn({ sale_id: selectedInvoice.id, items: chosen.map(row => ({ sale_item_id: row.item.id, quantity: row.quantity })), settlement_method: settlement as Extract<ReturnSettlementMethod, 'CASH_REFUND' | 'CUSTOMER_BALANCE' | 'CUSTOMER_CREDIT'>, condition, notes, idempotency_key: `${operationKey}-sale-${selectedInvoice.id}` })
+        : createPurchaseReturn({ purchase_id: selectedInvoice.id, items: chosen.map(row => ({ purchase_item_id: row.item.id, quantity: row.quantity })), settlement_method: settlement as Extract<ReturnSettlementMethod, 'CASH_REFUND' | 'SUPPLIER_BALANCE'>, notes, idempotency_key: `${operationKey}-purchase-${selectedInvoice.id}` });
+      if (!result.success) { showAlert('تعذر تسجيل المرتجع', result.error); return; }
+      await flushDatabaseWrites();
+      router.replace({ pathname: '/return-detail', params: { type: kind, returnId: String(result.record.id) } } as any);
+    } catch {
+      showAlert('تعذر تأكيد الحفظ', 'لم يتم تأكيد حفظ المرتجع على الجهاز. تحقق من سجل المرتجعات قبل إعادة المحاولة.');
+    } finally {
+      setSaving(false);
+    }
   };
 
   const settlementOptions: { value: ReturnSettlementMethod; label: string }[] = kind === 'sale'
