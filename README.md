@@ -62,6 +62,12 @@ The shared catalog is stored in `public.drug_catalog`, separate from pharmacy-ow
 
 The supplied source is transformed by `python3 scripts/build-drug-catalog.py <source-zip>`. It selects only the normalized/modified trade-name fields (`trade_name_ar` and `trade_name_en`) and omits source-original names, prices, stock thresholds, quantities, dosing instructions, and indications. The current Supabase catalog contains 4,048 records. Generated JSON/CSV files are intentionally git-ignored because this GitHub repository is public; the reference data remains in Supabase and authenticated app caches. Adding an item requires a deliberate action and locally entered sale price, purchase cost, and positive actual opening quantity. Source packaging conversions are suggestions and require confirmation before saving.
 
+## Pharmacy profile, permissions, and currency migration
+
+`supabase/005_admin_permissions_yemeni_rial.sql` adds pharmacy logo metadata, per-user job titles and permission overrides, a separately allow-listed system-administrator table, and the Yemeni-rial default. It is a migration file only; it is not applied automatically. Review and apply it intentionally in Supabase before using the new cloud profile fields. The system-administrator table is intentionally not writable from the mobile client.
+
+The app's pharmacy settings can store the selected logo locally for printing. Cross-device logo sharing requires a configured Supabase Storage bucket and upload flow; the local URI/data is not itself a cloud sync mechanism.
+
 ## Multi-cashbox Ledger
 
 The cash screen tracks three separate local balances: **Daily**, **Pharmacy**, and **Bank/Exchange**. Existing cash transactions without a cashbox identifier remain visible in the Daily cashbox to preserve historical balances; the combined balance remains the sum of all three boxes. Opening balances can be recorded once before the first non-zero movement in that box. Receipts and payments are explicit voucher transactions, expenses are assigned to the selected box, and an inter-box transfer creates a balanced outgoing/incoming pair so it does not change total cash. Daily closing records expected cash, counted cash, and the difference without changing the ledger balance; it also closes an active shift when one exists, while still allowing a cashbox-only closing snapshot when no shift is open. The screen supports date, box, movement-type and text filters, plus PDF export of the visible ledger.
