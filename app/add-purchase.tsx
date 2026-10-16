@@ -135,6 +135,7 @@ export default function AddPurchaseScreen() {
         notes,
       });
       if (result.success) {
+        await flushDatabaseWrites();
         showAlert('تم', `تم تسجيل فاتورة الشراء ${result.purchase?.invoice_number}`, [
           { text: 'موافق', onPress: () => router.back() },
         ]);
