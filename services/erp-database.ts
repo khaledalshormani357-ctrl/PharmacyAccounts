@@ -2662,8 +2662,18 @@ export function getReportSummary(dateFrom: string, dateTo: string): ReportSummar
   const saleReturns = store.saleReturns.filter(entry => entry.date >= dateFrom && entry.date <= dateTo);
   const purchaseReturns = store.purchaseReturns.filter(entry => entry.date >= dateFrom && entry.date <= dateTo);
 
-  const grossCashSales = sales.filter(s => s.sale_type === 'cash').reduce((a, s) => a + s.total, 0);
-  const grossCreditSales = sales.filter(s => s.sale_type === 'credit').reduce((a, s) => a + s.total, 0);
+  // Mixed invoices must contribute their actually paid portion to cash sales and
+  // their outstanding portion to credit sales; excluding them understated revenue.
+  const grossCashSales = sales.reduce((sum, sale) => {
+    if (sale.sale_type === 'cash') return sum + sale.total;
+    if (sale.sale_type === 'mixed') return sum + sale.amount_paid;
+    return sum;
+  }, 0);
+  const grossCreditSales = sales.reduce((sum, sale) => {
+    if (sale.sale_type === 'credit') return sum + sale.total;
+    if (sale.sale_type === 'mixed') return sum + sale.remaining;
+    return sum;
+  }, 0);
   const cashSales = grossCashSales - saleReturns.reduce((sum, entry) => sum + entry.cash_refund, 0);
   const creditSales = grossCreditSales - saleReturns.reduce((sum, entry) => sum + entry.credit_reduction, 0);
   const collections = store.cashTransactions
