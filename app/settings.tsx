@@ -62,9 +62,13 @@ export default function SettingsScreen() {
 
   const choosePharmacyLogo = async () => {
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'], allowsEditing: true, aspect: [1, 1], quality: 0.8,
+      mediaTypes: ['images'], allowsEditing: true, aspect: [1, 1], quality: 0.65, base64: true,
     });
-    if (!result.canceled && result.assets[0]?.uri) setPharmacyLogoUri(result.assets[0].uri);
+    if (!result.canceled && result.assets[0]?.uri) {
+      const asset = result.assets[0];
+      // Store a self-contained image so print HTML can render it without a device file path.
+      setPharmacyLogoUri(asset.base64 ? `data:${asset.mimeType || 'image/jpeg'};base64,${asset.base64}` : asset.uri);
+    }
   };
 
   const handleOpeningBalance = () => {
