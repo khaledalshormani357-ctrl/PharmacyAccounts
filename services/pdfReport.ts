@@ -3,6 +3,7 @@ import { Platform } from 'react-native';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import { formatCurrency } from '@/constants/i18n';
+import { getSetting } from '@/services/database';
 import { buildCustomerSaleInvoiceBody, CustomerInvoiceLine } from './customer-invoice';
 import { buildReturnInvoiceBody, ReturnInvoiceBodyData } from './return-invoice';
 
@@ -137,6 +138,13 @@ function buildDocument(params: {
 }): string {
   const { pharmacyName, title, subtitle, body } = params;
   const accent = /^#(?:[0-9a-fA-F]{3}){1,2}$/.test(params.accent || '') ? params.accent! : '#0052CC';
+  const pharmacyPhone = getSetting('pharmacy_phone') || '';
+  const pharmacyAddress = getSetting('pharmacy_address') || '';
+  const pharmacyLogo = getSetting('pharmacy_logo_uri') || '';
+  const logoHtml = pharmacyLogo.startsWith('data:image/')
+    ? `<img class="pharmacy-logo" src="${escapeHtml(pharmacyLogo)}" alt="شعار الصيدلية" />`
+    : '';
+  const contactHtml = [pharmacyPhone ? `الهاتف: ${escapeHtml(pharmacyPhone)}` : '', pharmacyAddress ? escapeHtml(pharmacyAddress) : ''].filter(Boolean).join(' · ');
   return `<!DOCTYPE html>
 <html lang="ar" dir="rtl">
 <head>
@@ -151,6 +159,8 @@ function buildDocument(params: {
     .header { padding: 24px 28px 20px; color: #fff; text-align: center; background: linear-gradient(135deg, ${accent}, #172B4D); }
     .header h1 { margin: 0; font-size: 22px; font-weight: 800; }
     .header .pharmacy { margin: 6px 0 0; font-size: 14px; opacity: .9; }
+    .header .pharmacy-contact { margin-top: 5px; font-size: 11px; opacity: .88; }
+    .header .pharmacy-logo { display: block; width: 64px; height: 64px; object-fit: contain; margin: 0 auto 8px; border-radius: 8px; background: #fff; padding: 3px; }
     .header .subtitle { display: inline-block; margin-top: 12px; padding: 4px 14px; border: 1px solid rgba(255,255,255,.32); border-radius: 999px; font-size: 12px; }
     .content { padding: 22px 26px 8px; }
     .section { margin-bottom: 18px; border: 1px solid #E2E8F0; border-radius: 9px; overflow: hidden; }
@@ -178,8 +188,10 @@ function buildDocument(params: {
 <body>
   <main class="page">
     <header class="header">
+      ${logoHtml}
       <h1>${escapeHtml(title)}</h1>
       <div class="pharmacy">${escapeHtml(pharmacyName || 'صيدليتي')}</div>
+      ${contactHtml ? `<div class="pharmacy-contact">${contactHtml}</div>` : ''}
       ${subtitle ? `<div class="subtitle">${escapeHtml(subtitle)}</div>` : ''}
     </header>
     <div class="content">${body}</div>
