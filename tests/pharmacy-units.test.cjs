@@ -4,11 +4,12 @@ const Module = require('node:module');
 
 const originalLoad = Module._load;
 let persistedStore = null;
+let failPersist = false;
 Module._load = function (request, parent, isMain) {
   if (request === '@react-native-async-storage/async-storage') {
     return { __esModule: true, default: {
       getItem: async () => persistedStore,
-      setItem: async (_key, value) => { persistedStore = value; },
+      setItem: async (_key, value) => { if (failPersist) throw new Error('simulated storage failure'); persistedStore = value; },
       removeItem: async () => { persistedStore = null; },
     } };
   }
@@ -415,4 +416,55 @@ test('return customer document references the original invoice and never renders
   assert.match(body, /رد نقدي/);
   assert.match(body, /الفاتورة الأصلية/);
   assert.doesNotMatch(body, /999999|gross.?profit|COGS|margin|cost.?price|التكلفة|الربح|الهامش/i);
+});
+
+
+test('backup excludes device PIN settings and restore preserves the receiving device PIN', async () => {
+  await db.databaseReady;
+  db.setSetting('pin_enabled', 'true');
+  db.setSetting('pin_code', '2468');
+  await db.flushDatabaseWrites();
+
+  const backup = db.createBackup();
+  assert.equal(Object.hasOwn(backup.settings, 'pin_code'), false);
+  assert.equal(Object.hasOwn(backup.settings, 'pin_enabled'), false);
+
+  backup.settings.pharmacy_name = 'Restored pharmacy';
+  backup.settings.pin_code = '9999';
+  backup.settings.pin_enabled = 'false';
+  const result = await db.restoreBackup(backup);
+  assert.equal(result.success, true);
+  assert.equal(db.getSetting('pharmacy_name'), 'Restored pharmacy');
+  assert.equal(db.getSetting('pin_code'), '2468');
+  assert.equal(db.getSetting('pin_enabled'), 'true');
+});
+
+test('invalid backup is rejected before changing current inventory', async () => {
+  await db.databaseReady;
+  const before = db.getProducts().length;
+  const result = await db.restoreBackup({
+    schema_version: '1.1.0',
+    products: { not: 'an array' },
+  });
+  assert.equal(result.success, false);
+  assert.equal(db.getProducts().length, before);
+});
+
+test('restore rolls back in-memory state and reports a persistence failure', async () => {
+  await db.databaseReady;
+  const beforeName = db.getSetting('pharmacy_name');
+  const backup = db.createBackup();
+  backup.settings.pharmacy_name = 'Must not be committed';
+  failPersist = true;
+  try {
+    const result = await db.restoreBackup(backup);
+    assert.equal(result.success, false);
+    assert.match(result.error || '', /simulated storage failure/);
+    assert.equal(db.getSetting('pharmacy_name'), beforeName);
+  } finally {
+    failPersist = false;
+    // Allow the queue to recover before the test process exits.
+    db.setSetting('test_storage_recovery', 'true');
+    await db.flushDatabaseWrites();
+  }
 });
