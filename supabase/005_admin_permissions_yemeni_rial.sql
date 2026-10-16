@@ -71,37 +71,38 @@ SET search_path = public, pg_temp
 AS $$
   SELECT CASE
     WHEN public.is_system_admin() THEN true
-    ELSE COALESCE(
-      (p.permissions ->> p_permission)::boolean,
-      CASE p.role
-        WHEN 'ADMIN' THEN true
-        WHEN 'PHARMACIST' THEN p_permission IN (
-          'dashboard.view', 'inventory.view', 'sales.view', 'sales.create',
-          'purchases.view', 'purchases.create', 'customers.view',
-          'suppliers.view', 'reports.view'
-        )
-        WHEN 'CASHIER' THEN p_permission IN (
-          'dashboard.view', 'inventory.view', 'sales.view', 'sales.create',
-          'customers.view'
-        )
-        WHEN 'STOREKEEPER' THEN p_permission IN (
-          'dashboard.view', 'inventory.view', 'inventory.adjust',
-          'purchases.view', 'purchases.create', 'suppliers.view'
-        )
-        WHEN 'ACCOUNTANT' THEN p_permission IN (
-          'dashboard.view', 'sales.view', 'purchases.view', 'customers.view',
-          'suppliers.view', 'cashbox.view', 'expenses.manage', 'reports.view'
-        )
-        ELSE false
-      END,
-      false
-    )
-  END
-  FROM public.pharmacy_profiles AS p
-  WHERE p.id = auth.uid() AND p.active = true
-  LIMIT 1;
+    ELSE COALESCE((
+      SELECT CASE
+        WHEN jsonb_typeof(p.permissions -> p_permission) = 'boolean'
+          THEN (p.permissions ->> p_permission)::boolean
+        ELSE CASE p.role
+          WHEN 'ADMIN' THEN p_permission NOT IN ('system_admin.manage', 'pharmacies.cross_tenant.manage')
+          WHEN 'PHARMACIST' THEN p_permission IN (
+            'dashboard.view', 'inventory.view', 'sales.view', 'sales.create',
+            'purchases.view', 'purchases.create', 'customers.view',
+            'suppliers.view', 'reports.view'
+          )
+          WHEN 'CASHIER' THEN p_permission IN (
+            'dashboard.view', 'inventory.view', 'sales.view', 'sales.create',
+            'customers.view'
+          )
+          WHEN 'STOREKEEPER' THEN p_permission IN (
+            'dashboard.view', 'inventory.view', 'inventory.adjust',
+            'purchases.view', 'purchases.create', 'suppliers.view'
+          )
+          WHEN 'ACCOUNTANT' THEN p_permission IN (
+            'dashboard.view', 'sales.view', 'purchases.view', 'customers.view',
+            'suppliers.view', 'cashbox.view', 'expenses.manage', 'reports.view'
+          )
+          ELSE false
+        END
+      END
+      FROM public.pharmacy_profiles AS p
+      WHERE p.id = auth.uid() AND p.active = true
+      LIMIT 1
+    ), false)
+  END;
 $$;
-
 REVOKE ALL ON FUNCTION public.current_user_has_pharmacy_permission(text) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.current_user_has_pharmacy_permission(text) TO authenticated;
 
