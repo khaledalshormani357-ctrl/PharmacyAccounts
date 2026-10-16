@@ -6,7 +6,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from 'expo-router';
 import { useTheme } from '@/contexts/ThemeContext';
 import {
-  getReportSummary, getExpensesByCategory, getSetting, getSales, getPurchases,
+  getReportSummary, getExpensesByCategory, getSetting, getSales,
   getAllSaleReturns, getAllPurchaseReturns, getExpenses, getCashTransactions,
   getProducts, getProductStock, getInventoryList, getExpiryRadar, getDeadStock,
   getStockMovements, getAuditLogs,
