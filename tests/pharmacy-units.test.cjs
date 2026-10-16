@@ -49,6 +49,26 @@ function buy(productId, batch, expiry, quantity, unit, price) {
   }], discount: 0, amount_paid: 0 });
 }
 
+test('financial summary includes both paid and outstanding portions of mixed-payment invoices', () => {
+  const medicine = product('Mixed payment report example', 10);
+  configure(medicine.id);
+  buy(medicine.id, 'MIXED-REPORT-BATCH', '2027-12-31', 20, 'Tablet', 10);
+  const before = db.getReportSummary('2026-10-16', '2026-10-16');
+  const result = db.createSale({
+    sale_type: 'mixed',
+    date: '2026-10-16',
+    items: [{ product_id: medicine.id, unit: 'Tablet', quantity: 10, unit_price: 15, discount: 0 }],
+    discount: 0,
+    amount_paid: 60,
+  });
+  assert.equal(result.success, true);
+  const after = db.getReportSummary('2026-10-16', '2026-10-16');
+  assert.equal(after.cashSales - before.cashSales, 60);
+  assert.equal(after.creditSales - before.creditSales, 90);
+  assert.equal(after.totalSales - before.totalSales, 150);
+  assert.equal(after.grossProfit - before.grossProfit, 50);
+});
+
 test('1 Box = 100 Tablets; 5 Boxes convert to 500 base units and prices derive automatically', () => {
   const result = conversion.deriveUnitFactors('Tablet', [
     { unit_name: 'Strip', parent_unit_name: 'Tablet', quantity_per_parent: 10 },
