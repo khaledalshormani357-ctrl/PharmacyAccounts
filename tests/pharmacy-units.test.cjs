@@ -468,3 +468,52 @@ test('restore rolls back in-memory state and reports a persistence failure', asy
     await db.flushDatabaseWrites();
   }
 });
+
+
+test('sale cancellation rolls back stock, cash, customer balance, audit and identifiers after a mid-commit failure', () => {
+  const customer = db.addCustomer({ name: 'Atomic cancellation customer' });
+  const medicine = product('Atomic cancellation example');
+  configure(medicine.id);
+  buy(medicine.id, 'CANCEL-ATOMIC', '2027-12-31', 1, 'Box', 1000);
+  const sale = db.createSale({
+    sale_type: 'credit', customer_id: customer.id,
+    items: [{ product_id: medicine.id, unit: 'Tablet', quantity: 1, unit_price: 15, discount: 0 }],
+    discount: 0, amount_paid: 5,
+  });
+  assert.equal(sale.success, true);
+  const invoice = sale.sale;
+  const batchBefore = db.getBatches(medicine.id, false)[0].quantity;
+  const stockBefore = db.getProductStock(medicine.id);
+  const cashBefore = db.getCashTransactions().length;
+  const balanceBefore = db.getCustomer(customer.id).balance;
+  const movementsBefore = db.getStockMovements(medicine.id).length;
+  const auditsBefore = db.getAuditLogs({ entity: 'sale' }).length;
+  const originalToISOString = Date.prototype.toISOString;
+  let calls = 0;
+  // Fail after cancellation has started and batch stock was incremented.
+  // eslint-disable-next-line no-extend-native -- scoped deterministic fault injection
+  Date.prototype.toISOString = function () {
+    calls += 1;
+    if (calls === 2) throw new Error('forced cancellation commit failure');
+    return originalToISOString.call(this);
+  };
+  try {
+    assert.throws(() => db.cancelSale(invoice.id, 'test rollback'), /forced cancellation commit failure/);
+  } finally {
+    // eslint-disable-next-line no-extend-native -- restore built-in after the fault-injection case
+    Date.prototype.toISOString = originalToISOString;
+  }
+  assert.equal(db.getSale(invoice.id).cancelled, false);
+  assert.equal(db.getBatches(medicine.id, false)[0].quantity, batchBefore);
+  assert.equal(db.getProductStock(medicine.id), stockBefore);
+  assert.equal(db.getCashTransactions().length, cashBefore);
+  assert.equal(db.getCustomer(customer.id).balance, balanceBefore);
+  assert.equal(db.getStockMovements(medicine.id).length, movementsBefore);
+  assert.equal(db.getAuditLogs({ entity: 'sale' }).length, auditsBefore);
+
+  db.cancelSale(invoice.id, 'successful retry');
+  assert.equal(db.getSale(invoice.id).cancelled, true);
+  assert.equal(db.getBatches(medicine.id, false)[0].quantity, batchBefore + 1);
+  assert.equal(db.getCustomer(customer.id).balance, balanceBefore - invoice.remaining);
+  assert.equal(db.getCashTransactions().length, cashBefore + 1);
+});
