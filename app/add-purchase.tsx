@@ -8,7 +8,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useTheme } from '@/contexts/ThemeContext';
-import { createPurchase, getProductUnits, getSuppliers, getProducts, getSetting, getUnitPrice, Supplier, Product } from '@/services/database';
+import { createPurchase, getProductUnits, getSuppliers, getProducts, getSetting, getUnitPrice, flushDatabaseWrites, Supplier, Product } from '@/services/database';
 import { formatCurrency, getToday } from '@/constants/i18n';
 import { useAlert } from '@/template';
 import { formatUnitEquivalents, isValidIsoDate, isValidUnitQuantity } from '@/services/unit-conversion';
