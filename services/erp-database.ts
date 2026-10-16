@@ -1630,7 +1630,7 @@ function nextPurchaseReturnNumber(id: number): string {
 }
 
 function commitReturnAtomically<T>(commit: () => T): T {
-  return withAtomicMutation(
+  const result = withAtomicMutation(
     () => JSON.stringify({ store, ids, invoiceCounter }),
     (serialized) => {
       const snapshot = JSON.parse(serialized) as { store: typeof store; ids: typeof ids; invoiceCounter: number };
@@ -1641,6 +1641,9 @@ function commitReturnAtomically<T>(commit: () => T): T {
     commit,
     persistStore,
   );
+  // Persist every successful atomic transaction as well as rollback recovery.
+  persistStore();
+  return result;
 }
 
 export interface NewSaleReturn {
