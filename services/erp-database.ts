@@ -2863,10 +2863,12 @@ export async function restoreBackup(data: BackupData): Promise<{ success: boolea
   }
   for (const key of collectionKeys) {
     const rows = (data as any)[key];
-    if (rows !== undefined && (!Array.isArray(rows) || rows.some((row: unknown) =>
+    // Require every collection emitted by the current backup schema; accepting
+    // missing arrays would silently interpret a partial file as empty inventory.
+    if (!Array.isArray(rows) || rows.some((row: unknown) =>
       !row || typeof row !== 'object' || Array.isArray(row)
-    ))) {
-      return { success: false, error: `بيانات غير صالحة في: ${key}` };
+    )) {
+      return { success: false, error: `بيانات غير مكتملة أو غير صالحة في: ${key}` };
     }
   }
 
