@@ -142,6 +142,8 @@ export default function AddPurchaseScreen() {
       } else {
         showAlert('خطأ', result.error || 'فشل تسجيل الفاتورة');
       }
+    } catch {
+      showAlert('تعذر تأكيد الحفظ', 'تعذر تأكيد حفظ الفاتورة على الجهاز. تحقق من الفاتورة قبل إعادة تسجيلها.');
     } finally {
       setSaving(false);
     }
