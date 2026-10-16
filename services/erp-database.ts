@@ -1508,6 +1508,7 @@ export function createSale(data: NewSale): SaleResult {
 }
 
 export function cancelSale(id: number, reason: string, user_id?: number): void {
+  commitReturnAtomically(() => {
   const sale = store.sales.find(s => s.id === id);
   if (!sale || sale.cancelled || store.saleReturns.some(entry => entry.sale_id === id)) return;
 
@@ -1570,7 +1571,7 @@ export function cancelSale(id: number, reason: string, user_id?: number): void {
 
   addAuditLog({ action: 'SALE_CANCEL', entity: 'sale', entity_id: id,
     before_data: before, reason });
-  persistStore();
+  });
 }
 
 export function getSales(opts?: {
