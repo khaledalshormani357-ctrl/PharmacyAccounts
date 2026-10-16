@@ -41,17 +41,17 @@ export default function BackupScreen() {
       {
         text: 'استعادة',
         style: 'destructive',
-        onPress: () => {
+        onPress: async () => {
           try {
             const data = JSON.parse(backupJson);
-            const result = restoreBackup(data);
+            const result = await restoreBackup(data);
             if (result.success) {
-              showAlert('تم', 'تمت استعادة البيانات بنجاح');
+              showAlert('تم', 'تمت استعادة البيانات وحفظها بنجاح');
             } else {
-              showAlert('خطأ', result.error || 'فشلت الاستعادة');
+              showAlert('خطأ', result.error || 'فشلت الاستعادة؛ لم يتم اعتماد التغييرات');
             }
           } catch (e) {
-            showAlert('خطأ', 'البيانات غير صالحة');
+            showAlert('خطأ', 'البيانات غير صالحة أو تعذر حفظها');
           }
         },
       },
