@@ -232,8 +232,8 @@ export const AR = {
   insufficientStock: 'المخزون غير كافٍ',
 
   // Currency
-  currency_symbol: 'ر.س',
-  currency_name: 'ريال سعودي',
+  currency_symbol: 'ر.ي',
+  currency_name: 'ريال يمني',
 
   // Transaction types
   type_cash_sale: 'بيع نقدي',
