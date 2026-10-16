@@ -8,7 +8,9 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useTheme } from '@/contexts/ThemeContext';
-import { createPurchase, getProductUnits, getSuppliers, getProducts, getSetting, getUnitPrice, flushDatabaseWrites, Supplier, Product } from '@/services/database';
+import { addProduct, createPurchase, getProductUnits, getProductByCatalogSourceId, getSuppliers, getProducts, getSetting, getUnitPrice, flushDatabaseWrites, Supplier, Product } from '@/services/database';
+import { getLocalDrugCatalog, refreshRemoteDrugCatalog, DrugCatalogRecord } from '@/services/drug-catalog';
+import { searchDrugCatalog } from '@/services/drug-catalog-utils';
 import { formatCurrency, getToday } from '@/constants/i18n';
 import { useAlert } from '@/template';
 import { formatUnitEquivalents, isValidIsoDate, isValidUnitQuantity } from '@/services/unit-conversion';
@@ -46,8 +48,13 @@ export default function AddPurchaseScreen() {
   const [showProductSearch, setShowProductSearch] = useState(false);
   const [productSearch, setProductSearch] = useState('');
   const [productResults, setProductResults] = useState<Product[]>([]);
+  const [showCatalogPicker, setShowCatalogPicker] = useState(false);
+  const [catalogRecords, setCatalogRecords] = useState<DrugCatalogRecord[]>([]);
+  const [catalogQuery, setCatalogQuery] = useState('');
+  const [catalogLoading, setCatalogLoading] = useState(false);
 
-  const currencySymbol = getSetting('currency_symbol') || 'ر.س';
+  const currencySymbol = getSetting('currency_symbol') || 'ر.ي';
+  const catalogMatches = searchDrugCatalog(catalogRecords, catalogQuery).slice(0, 100);
 
   const subtotal = items.reduce((s, i) => {
     const qty = parseFloat(i.quantity) || 0;
@@ -74,6 +81,59 @@ export default function AddPurchaseScreen() {
       free_quantity: '0',
       discount: '0',
     }, ...prev]);
+  };
+
+  const openCatalogPicker = async () => {
+    setShowProductSearch(false);
+    setShowCatalogPicker(true);
+    setCatalogLoading(true);
+    try {
+      const local = await getLocalDrugCatalog();
+      setCatalogRecords(local.records);
+      const remote = await refreshRemoteDrugCatalog(true);
+      if (remote) setCatalogRecords(remote.records);
+    } finally {
+      setCatalogLoading(false);
+    }
+  };
+
+  const addCatalogDrugToPurchase = (record: DrugCatalogRecord) => {
+    const existing = getProductByCatalogSourceId(record.source_id);
+    if (existing) {
+      setShowCatalogPicker(false);
+      setCatalogQuery('');
+      addItem(existing);
+      return;
+    }
+
+    // Catalog data is descriptive only: do not invent price, stock, or batch data.
+    // The actual purchase invoice below requires a real batch, expiry, quantity and cost.
+    const baseUnit = record.base_unit?.trim() || 'قطعة';
+    const product = addProduct({
+      barcode: null,
+      internal_code: null,
+      trade_name: record.trade_name_ar,
+      generic_name: record.generic_name || null,
+      active_ingredient: record.active_ingredient || null,
+      strength: record.strength || null,
+      dosage_form: record.dosage_form || null,
+      manufacturer: record.manufacturer_name || null,
+      category: record.category_ar || null,
+      prescription_required: false,
+      controlled: false,
+      inventory_unit: baseUnit,
+      minimum_stock: 0,
+      reorder_level: 0,
+      selling_price: 0,
+      default_purchase_price: 0,
+      active: true,
+      notes: 'أُنشئ من كتالوج الأدوية؛ يجب إدخال الأسعار الفعلية ومراجعة الوحدات.',
+      catalog_source_id: record.source_id,
+    });
+    setShowCatalogPicker(false);
+    setCatalogQuery('');
+    addItem(product);
+    showAlert('تمت إضافة الدواء', 'أُضيف الاسم المرجعي إلى فاتورة الشراء. أدخل تكلفة الشراء الفعلية ورقم الدفعة وتاريخ الانتهاء والكمية، وحدد سعر البيع قبل صرف الدواء.');
   };
 
   const updateItem = (index: number, field: keyof PurchaseLineItem, value: any) => {
@@ -158,11 +218,17 @@ export default function AddPurchaseScreen() {
           <TouchableOpacity onPress={() => router.back()}>
             <MaterialIcons name="close" size={22} color="#FFFFFF" />
           </TouchableOpacity>
-          <Text style={{ fontSize: 17, fontWeight: '700', color: '#FFFFFF' }}>فاتورة شراء جديدة</Text>
-          <TouchableOpacity onPress={() => { setShowProductSearch(true); setProductResults(getProducts({ activeOnly: true })); }} style={{ backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 6, flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-            <MaterialIcons name="add" size={16} color="#FFFFFF" />
-            <Text style={{ color: '#FFFFFF', fontSize: 12, fontWeight: '600' }}>إضافة صنف</Text>
-          </TouchableOpacity>
+          <Text style={{ flex: 1, textAlign: 'center', fontSize: 16, fontWeight: '700', color: '#FFFFFF' }}>فاتورة شراء جديدة</Text>
+          <View style={{ flexDirection: 'row', gap: 5 }}>
+            <TouchableOpacity onPress={() => { void openCatalogPicker(); }} style={{ backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 6, flexDirection: 'row', alignItems: 'center', gap: 3 }}>
+              <MaterialIcons name="library-books" size={15} color="#FFFFFF" />
+              <Text style={{ color: '#FFFFFF', fontSize: 11, fontWeight: '600' }}>الكتالوج</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => { setShowProductSearch(true); setProductResults(getProducts({ activeOnly: true })); }} style={{ backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 6, flexDirection: 'row', alignItems: 'center', gap: 3 }}>
+              <MaterialIcons name="add" size={15} color="#FFFFFF" />
+              <Text style={{ color: '#FFFFFF', fontSize: 11, fontWeight: '600' }}>صنف</Text>
+            </TouchableOpacity>
+          </View>
         </View>
 
         {/* Header fields */}
@@ -335,6 +401,41 @@ export default function AddPurchaseScreen() {
                 </TouchableOpacity>
               )}
             />
+          </View>
+        </View>
+      </Modal>
+
+      {/* Shared reference catalog picker: selection adds a product to this purchase draft, not stock by itself. */}
+      <Modal visible={showCatalogPicker} animationType="slide" transparent onRequestClose={() => setShowCatalogPicker(false)}>
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)' }}>
+          <View style={{ position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: theme.colors.surface, borderTopLeftRadius: 20, borderTopRightRadius: 20, height: '82%', paddingBottom: insets.bottom + 12 }}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, borderBottomWidth: 1, borderBottomColor: theme.colors.border }}>
+              <TouchableOpacity onPress={() => setShowCatalogPicker(false)}><MaterialIcons name="close" size={22} color={theme.colors.textPrimary} /></TouchableOpacity>
+              <View style={{ flex: 1, alignItems: 'flex-end', marginHorizontal: 10 }}>
+                <Text style={{ fontSize: 16, fontWeight: '800', color: theme.colors.textPrimary }}>اختر دواء من الكتالوج</Text>
+                <Text style={{ fontSize: 10, color: theme.colors.textTertiary, marginTop: 2 }}>{catalogRecords.length.toLocaleString('ar')} سجل مرجعي</Text>
+              </View>
+              <MaterialIcons name="library-books" size={22} color={theme.colors.primary} />
+            </View>
+            <View style={{ margin: 12, backgroundColor: theme.colors.surfaceAlt, borderRadius: 8, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10, height: 42 }}>
+              <MaterialIcons name="search" size={18} color={theme.colors.textTertiary} />
+              <TextInput value={catalogQuery} onChangeText={setCatalogQuery} placeholder="ابحث بالاسم التجاري أو العلمي أو المادة" placeholderTextColor={theme.colors.textTertiary} style={{ flex: 1, fontSize: 13, textAlign: 'right', color: theme.colors.textPrimary, marginRight: 6 }} />
+            </View>
+            {catalogLoading && catalogRecords.length === 0 ? (
+              <View style={{ alignItems: 'center', padding: 28 }}><ActivityIndicator color={theme.colors.primary} /><Text style={{ color: theme.colors.textTertiary, marginTop: 8 }}>تحميل الكتالوج...</Text></View>
+            ) : (
+              <FlatList data={catalogMatches} keyExtractor={item => item.source_id}
+                keyboardShouldPersistTaps="handled"
+                renderItem={({ item }) => (
+                  <TouchableOpacity onPress={() => addCatalogDrugToPurchase(item)} style={{ paddingHorizontal: 15, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: theme.colors.divider }}>
+                    <Text style={{ fontSize: 14, fontWeight: '700', textAlign: 'right', color: theme.colors.textPrimary }}>{item.trade_name_ar}</Text>
+                    {!!item.trade_name_en && <Text style={{ fontSize: 11, textAlign: 'right', color: theme.colors.textSecondary, marginTop: 2 }}>{item.trade_name_en}</Text>}
+                    <Text style={{ fontSize: 10, textAlign: 'right', color: theme.colors.textTertiary, marginTop: 3 }}>{[item.generic_name, item.strength, item.dosage_form, item.manufacturer_name].filter(Boolean).join(' · ') || item.source_code}</Text>
+                  </TouchableOpacity>
+                )}
+                ListEmptyComponent={<View style={{ alignItems: 'center', padding: 28 }}><Text style={{ color: theme.colors.textTertiary, textAlign: 'center' }}>{catalogLoading ? 'جارٍ المزامنة...' : 'لا توجد نتائج. يلزم اتصال للمزامنة الأولى إذا لم توجد نسخة محفوظة.'}</Text></View>}
+              />
+            )}
           </View>
         </View>
       </Modal>
