@@ -564,10 +564,19 @@ export const getToday = today;
 
 function persistStore(): void {
   const snapshot = JSON.stringify({ store, ids, invoiceCounter });
+  // Keep the queue recoverable for later writes, but do not erase the current
+  // write's failure. Callers that need durability must await flushDatabaseWrites().
   persistQueue = persistQueue
     .catch(() => undefined)
-    .then(() => AsyncStorage.setItem(STORE_KEY, snapshot))
-    .catch(() => undefined);
+    .then(() => AsyncStorage.setItem(STORE_KEY, snapshot));
+  // Prevent an unhandled-rejection warning for legacy synchronous callers.
+  // The original promise remains rejected and is observable via flushDatabaseWrites().
+  void persistQueue.catch(() => undefined);
+}
+
+/** Resolve only after all writes queued so far have reached device storage. */
+export async function flushDatabaseWrites(): Promise<void> {
+  await persistQueue;
 }
 
 async function hydrateStore(): Promise<void> {
@@ -2803,11 +2812,15 @@ export interface BackupData {
 }
 
 export function createBackup(): BackupData {
+  // Device-local access controls must never be exported to a shareable backup.
+  const backupSettings = { ...store.settings };
+  delete backupSettings.pin_code;
+  delete backupSettings.pin_enabled;
   return {
     schema_version: '1.1.0',
     created_at: now(),
     pharmacy_name: store.settings['pharmacy_name'] || '',
-    settings: { ...store.settings },
+    settings: backupSettings,
     products: [...store.products],
     productUnits: [...store.productUnits],
     batches: [...store.batches],
@@ -2830,10 +2843,40 @@ export function createBackup(): BackupData {
   };
 }
 
-export function restoreBackup(data: BackupData): { success: boolean; error?: string } {
+export async function restoreBackup(data: BackupData): Promise<{ success: boolean; error?: string }> {
+  const collectionKeys = [
+    'products', 'productUnits', 'batches', 'stockMovements', 'customers', 'suppliers',
+    'sales', 'saleItems', 'saleBatchAllocations', 'saleReturns', 'purchases',
+    'purchaseItems', 'purchaseReturns', 'expenses', 'cashTransactions', 'shifts',
+    'customerTransactions', 'supplierTransactions', 'auditLogs',
+  ] as const;
+
+  // Validate the entire envelope before touching live in-memory state.
+  if (!data || typeof data !== 'object' || typeof data.schema_version !== 'string' || !data.schema_version.trim()) {
+    return { success: false, error: 'نسخة احتياطية غير صالحة' };
+  }
+  if (data.settings !== undefined && (
+    !data.settings || typeof data.settings !== 'object' || Array.isArray(data.settings) ||
+    Object.values(data.settings).some(value => typeof value !== 'string')
+  )) {
+    return { success: false, error: 'إعدادات النسخة الاحتياطية غير صالحة' };
+  }
+  for (const key of collectionKeys) {
+    const rows = (data as any)[key];
+    if (rows !== undefined && (!Array.isArray(rows) || rows.some((row: unknown) =>
+      !row || typeof row !== 'object' || Array.isArray(row)
+    ))) {
+      return { success: false, error: `بيانات غير صالحة في: ${key}` };
+    }
+  }
+
+  const previousStore = JSON.parse(JSON.stringify(store)) as typeof store;
   try {
-    if (!data.schema_version) return { success: false, error: 'نسخة احتياطية غير صالحة' };
-    Object.assign(store.settings, data.settings);
+    // A backup may restore business settings, but cannot replace this device's PIN state.
+    const safeSettings = { ...(data.settings || {}) };
+    delete safeSettings.pin_code;
+    delete safeSettings.pin_enabled;
+    Object.assign(store.settings, safeSettings);
     store.products = data.products || [];
     store.productUnits = data.productUnits || [];
     store.batches = data.batches || [];
@@ -2855,9 +2898,14 @@ export function restoreBackup(data: BackupData): { success: boolean; error?: str
     store.auditLogs = data.auditLogs || [];
     addAuditLog({ action: 'RESTORE', entity: 'backup', entity_id: null,
       after_data: JSON.stringify({ from: data.created_at }) });
+    // Do not report a successful restore until the resulting snapshot is durable.
+    await flushDatabaseWrites();
     return { success: true };
   } catch (e: any) {
-    return { success: false, error: e?.message };
+    Object.keys(previousStore).forEach(key => {
+      (store as any)[key] = (previousStore as any)[key];
+    });
+    return { success: false, error: e?.message || 'فشلت الاستعادة' };
   }
 }
 
