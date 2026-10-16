@@ -20,8 +20,8 @@ export default function SetupScreen() {
 
   const [pharmacyName, setPharmacyName] = useState('');
   const [ownerName, setOwnerName] = useState('');
-  const [currency, setCurrency] = useState('ريال سعودي');
-  const [currencySymbol, setCurrencySymbol] = useState('ر.س');
+  const [currency, setCurrency] = useState('ريال يمني');
+  const [currencySymbol, setCurrencySymbol] = useState('ر.ي');
   const [adminUser, setAdminUser] = useState('admin');
   const [adminPass, setAdminPass] = useState('');
   const [confirmPass, setConfirmPass] = useState('');
@@ -118,7 +118,7 @@ export default function SetupScreen() {
                 style={inputStyle}
                 value={currency}
                 onChangeText={setCurrency}
-                placeholder="ريال سعودي"
+                placeholder="ريال يمني"
                 placeholderTextColor="#C1C7D0"
               />
               <Text style={labelStyle}>رمز العملة</Text>
@@ -126,7 +126,7 @@ export default function SetupScreen() {
                 style={inputStyle}
                 value={currencySymbol}
                 onChangeText={setCurrencySymbol}
-                placeholder="ر.س"
+                placeholder="ر.ي"
                 placeholderTextColor="#C1C7D0"
               />
 
