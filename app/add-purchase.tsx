@@ -8,7 +8,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useTheme } from '@/contexts/ThemeContext';
-import { addProduct, addProductUnit, createPurchase, getProductUnits, getProductByCatalogSourceId, getSuppliers, getProducts, getSetting, getUnitPrice, flushDatabaseWrites, Supplier, Product } from '@/services/database';
+import { addProduct, addProductUnit, updateProduct, createPurchase, getProductUnits, getProductByCatalogSourceId, getSuppliers, getProducts, getSetting, getUnitPrice, flushDatabaseWrites, Supplier, Product } from '@/services/database';
 import { getLocalDrugCatalog, refreshRemoteDrugCatalog, DrugCatalogRecord } from '@/services/drug-catalog';
 import { searchDrugCatalog } from '@/services/drug-catalog-utils';
 import { formatCurrency, getToday } from '@/constants/i18n';
@@ -53,6 +53,7 @@ export default function AddPurchaseScreen() {
   const [catalogQuery, setCatalogQuery] = useState('');
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [catalogDraft, setCatalogDraft] = useState<DrugCatalogRecord | null>(null);
+  const [catalogExistingProduct, setCatalogExistingProduct] = useState<Product | null>(null);
   const [draftTradeName, setDraftTradeName] = useState('');
   const [draftBaseUnit, setDraftBaseUnit] = useState('حبة');
   const [draftPurchaseUnit, setDraftPurchaseUnit] = useState('علبة');
@@ -105,24 +106,22 @@ export default function AddPurchaseScreen() {
 
   const addCatalogDrugToPurchase = (record: DrugCatalogRecord) => {
     const existing = getProductByCatalogSourceId(record.source_id);
-    if (existing) {
-      setShowCatalogPicker(false);
-      setCatalogQuery('');
-      addItem(existing);
-      return;
-    }
-
-    // Open an editable draft first: reference-catalog packaging is a suggestion,
-    // never silently treated as the pharmacy's confirmed inventory conversion.
-    const suggestedBase = record.base_unit?.trim() || 'حبة';
-    const suggestedPurchase = record.selling_unit?.trim() || 'علبة';
+    // Open the editor for both new and previously imported products so the
+    // purchase unit can be reviewed before the item enters the invoice draft.
+    const suggestedBase = existing?.inventory_unit || record.base_unit?.trim() || 'حبة';
+    const suggestedPurchase = existing
+      ? (getProductUnits(existing.id).find(unit => unit.is_purchase_default)?.unit_name || existing.inventory_unit)
+      : (record.selling_unit?.trim() || 'علبة');
+    const suggestedUnit = suggestedPurchase === suggestedBase ? 'علبة' : suggestedPurchase;
+    const existingUnit = existing ? getProductUnits(existing.id).find(unit => unit.unit_name === suggestedUnit) : null;
     const suggestedFactor = Number(record.pack_size);
+    setCatalogExistingProduct(existing);
     setCatalogDraft(record);
-    setDraftTradeName(record.trade_name_ar || '');
+    setDraftTradeName(existing?.trade_name || record.trade_name_ar || '');
     setDraftBaseUnit(suggestedBase);
-    setDraftPurchaseUnit(suggestedPurchase === suggestedBase ? 'علبة' : suggestedPurchase);
-    setDraftConversionFactor(String(Number.isFinite(suggestedFactor) && suggestedFactor > 1 ? suggestedFactor : 10));
-    setDraftSellingPrice('0');
+    setDraftPurchaseUnit(suggestedUnit);
+    setDraftConversionFactor(String(existingUnit?.conversion_factor || (Number.isFinite(suggestedFactor) && suggestedFactor > 1 ? suggestedFactor : 10)));
+    setDraftSellingPrice(String(existing?.selling_price ?? 0));
   };
 
   const confirmCatalogDraft = () => {
@@ -133,7 +132,7 @@ export default function AddPurchaseScreen() {
     const factor = Number(draftConversionFactor);
     const sellingPrice = Number(draftSellingPrice);
     if (!tradeName || !baseUnit || !purchaseUnit) {
-      showAlert('بيانات ناقصة', 'أدخل اسم الدواء ووحدة المخزون ووحدة الشراء.');
+      showAlert('بيانات ناقصة', 'أدخل اسم الدواء ووحدة الشراء. وحدة المخزون الأساسية للدواء الموجود لا يمكن تغييرها حتى لا تتغير أرصدة الدفعات السابقة.');
       return;
     }
     if (purchaseUnit !== baseUnit && (!Number.isFinite(factor) || factor <= 1 || !Number.isInteger(factor))) {
@@ -145,48 +144,71 @@ export default function AddPurchaseScreen() {
       return;
     }
 
-    const product = addProduct({
-      barcode: null,
-      internal_code: null,
-      trade_name: tradeName,
-      generic_name: catalogDraft.generic_name || null,
-      active_ingredient: catalogDraft.active_ingredient || null,
-      strength: catalogDraft.strength || null,
-      dosage_form: catalogDraft.dosage_form || null,
-      manufacturer: catalogDraft.manufacturer_name || null,
-      category: catalogDraft.category_ar || null,
-      prescription_required: false,
-      controlled: false,
-      inventory_unit: baseUnit,
-      minimum_stock: 0,
-      reorder_level: 0,
-      selling_price: sellingPrice,
-      default_purchase_price: 0,
-      active: true,
-      notes: 'أُنشئ من كتالوج الأدوية؛ تمت مراجعة وحدة المخزون ووحدة الشراء يدويًا.',
-      catalog_source_id: catalogDraft.source_id,
-    });
-
-    if (purchaseUnit !== baseUnit) {
-      addProductUnit({
-        product_id: product.id,
-        unit_name: purchaseUnit,
-        conversion_factor: factor,
-        parent_unit_name: baseUnit,
-        quantity_per_parent: factor,
-        sale_price: null,
-        purchase_price: null,
-        is_purchase_default: true,
-        is_sale_default: false,
+    let product = catalogExistingProduct;
+    if (product) {
+      // Keep the existing stock base unit authoritative; changing it could corrupt
+      // historical quantities. The trade name and missing purchase-unit definition
+      // can be corrected safely from this review step.
+      updateProduct(product.id, { trade_name: tradeName, selling_price: sellingPrice });
+      product = { ...product, trade_name: tradeName, selling_price: sellingPrice };
+      const existingUnit = getProductUnits(product.id).find(unit => unit.unit_name === purchaseUnit);
+      if (purchaseUnit !== baseUnit && !existingUnit) {
+        addProductUnit({
+          product_id: product.id,
+          unit_name: purchaseUnit,
+          conversion_factor: factor,
+          parent_unit_name: baseUnit,
+          quantity_per_parent: factor,
+          sale_price: null,
+          purchase_price: null,
+          is_purchase_default: true,
+          is_sale_default: false,
+        });
+      }
+    } else {
+      product = addProduct({
+        barcode: null,
+        internal_code: null,
+        trade_name: tradeName,
+        generic_name: catalogDraft.generic_name || null,
+        active_ingredient: catalogDraft.active_ingredient || null,
+        strength: catalogDraft.strength || null,
+        dosage_form: catalogDraft.dosage_form || null,
+        manufacturer: catalogDraft.manufacturer_name || null,
+        category: catalogDraft.category_ar || null,
+        prescription_required: false,
+        controlled: false,
+        inventory_unit: baseUnit,
+        minimum_stock: 0,
+        reorder_level: 0,
+        selling_price: sellingPrice,
+        default_purchase_price: 0,
+        active: true,
+        notes: 'أُنشئ من كتالوج الأدوية؛ تمت مراجعة وحدة المخزون ووحدة الشراء يدويًا.',
+        catalog_source_id: catalogDraft.source_id,
       });
+      if (purchaseUnit !== baseUnit) {
+        addProductUnit({
+          product_id: product.id,
+          unit_name: purchaseUnit,
+          conversion_factor: factor,
+          parent_unit_name: baseUnit,
+          quantity_per_parent: factor,
+          sale_price: null,
+          purchase_price: null,
+          is_purchase_default: true,
+          is_sale_default: false,
+        });
+      }
     }
     setCatalogDraft(null);
+    setCatalogExistingProduct(null);
     setShowCatalogPicker(false);
     setCatalogQuery('');
     addItem(product);
-    // Set the purchase line to the confirmed package unit and show its converted cost.
-    setItems(prev => prev.map((item, index) => index === 0 && item.product.id === product.id
-      ? { ...item, unit: purchaseUnit, purchase_price: '0' }
+    // The confirmed purchase unit becomes the selected unit in the invoice line.
+    setItems(prev => prev.map((item, index) => index === 0 && item.product.id === product!.id
+      ? { ...item, unit: purchaseUnit, purchase_price: String(getUnitPrice(product!.id, purchaseUnit, 'purchase') ?? 0) }
       : item));
     showAlert('تمت إضافة الدواء', 'تمت إضافة الدواء بعد مراجعة وحداته. أدخل تكلفة وحدة الشراء الفعلية ورقم الدفعة وتاريخ الانتهاء والكمية قبل حفظ الفاتورة.');
   };
@@ -500,7 +522,7 @@ export default function AddPurchaseScreen() {
         <KeyboardAvoidingView style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'flex-end' }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
           <View style={{ backgroundColor: theme.colors.surface, borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 16, paddingBottom: insets.bottom + 18, maxHeight: '88%' }}>
             <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-              <TouchableOpacity onPress={() => setCatalogDraft(null)}><MaterialIcons name="close" size={22} color={theme.colors.textPrimary} /></TouchableOpacity>
+              <TouchableOpacity onPress={() => { setCatalogDraft(null); setCatalogExistingProduct(null); }}><MaterialIcons name="close" size={22} color={theme.colors.textPrimary} /></TouchableOpacity>
               <Text style={{ fontSize: 16, fontWeight: '800', color: theme.colors.textPrimary }}>مراجعة الدواء ووحداته</Text>
               <MaterialIcons name="edit" size={22} color={theme.colors.primary} />
             </View>
@@ -508,7 +530,7 @@ export default function AddPurchaseScreen() {
               <Text style={{ color: theme.colors.textSecondary, fontSize: 12, textAlign: 'right', marginBottom: 5 }}>اسم الدواء التجاري</Text>
               <TextInput value={draftTradeName} onChangeText={setDraftTradeName} style={[inputSm, { height: 44, textAlign: 'right', marginBottom: 10 }]} />
               <Text style={{ color: theme.colors.textSecondary, fontSize: 12, textAlign: 'right', marginBottom: 5 }}>وحدة المخزون الأساسية (أصغر وحدة)</Text>
-              <TextInput value={draftBaseUnit} onChangeText={setDraftBaseUnit} placeholder="مثال: حبة" style={[inputSm, { height: 44, textAlign: 'right', marginBottom: 10 }]} />
+              <TextInput value={draftBaseUnit} onChangeText={setDraftBaseUnit} placeholder="مثال: حبة" editable={!catalogExistingProduct} style={[inputSm, { height: 44, textAlign: 'right', marginBottom: 10 }]} />
               <Text style={{ color: theme.colors.textSecondary, fontSize: 12, textAlign: 'right', marginBottom: 5 }}>وحدة الشراء التي ستظهر في الفاتورة</Text>
               <TextInput value={draftPurchaseUnit} onChangeText={setDraftPurchaseUnit} placeholder="مثال: شريط أو علبة" style={[inputSm, { height: 44, textAlign: 'right', marginBottom: 10 }]} />
               {draftPurchaseUnit.trim() !== draftBaseUnit.trim() && <>
