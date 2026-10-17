@@ -8,7 +8,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useTheme } from '@/contexts/ThemeContext';
-import { addProduct, createPurchase, getProductUnits, getProductByCatalogSourceId, getSuppliers, getProducts, getSetting, getUnitPrice, flushDatabaseWrites, Supplier, Product } from '@/services/database';
+import { addProduct, addProductUnit, createPurchase, getProductUnits, getProductByCatalogSourceId, getSuppliers, getProducts, getSetting, getUnitPrice, flushDatabaseWrites, Supplier, Product } from '@/services/database';
 import { getLocalDrugCatalog, refreshRemoteDrugCatalog, DrugCatalogRecord } from '@/services/drug-catalog';
 import { searchDrugCatalog } from '@/services/drug-catalog-utils';
 import { formatCurrency, getToday } from '@/constants/i18n';
@@ -52,6 +52,12 @@ export default function AddPurchaseScreen() {
   const [catalogRecords, setCatalogRecords] = useState<DrugCatalogRecord[]>([]);
   const [catalogQuery, setCatalogQuery] = useState('');
   const [catalogLoading, setCatalogLoading] = useState(false);
+  const [catalogDraft, setCatalogDraft] = useState<DrugCatalogRecord | null>(null);
+  const [draftTradeName, setDraftTradeName] = useState('');
+  const [draftBaseUnit, setDraftBaseUnit] = useState('حبة');
+  const [draftPurchaseUnit, setDraftPurchaseUnit] = useState('علبة');
+  const [draftConversionFactor, setDraftConversionFactor] = useState('10');
+  const [draftSellingPrice, setDraftSellingPrice] = useState('0');
 
   const currencySymbol = getSetting('currency_symbol') || 'ر.ي';
   const catalogMatches = searchDrugCatalog(catalogRecords, catalogQuery).slice(0, 100);
@@ -106,34 +112,83 @@ export default function AddPurchaseScreen() {
       return;
     }
 
-    // Catalog data is descriptive only: do not invent price, stock, or batch data.
-    // The actual purchase invoice below requires a real batch, expiry, quantity and cost.
-    const baseUnit = record.base_unit?.trim() || 'قطعة';
+    // Open an editable draft first: reference-catalog packaging is a suggestion,
+    // never silently treated as the pharmacy's confirmed inventory conversion.
+    const suggestedBase = record.base_unit?.trim() || 'حبة';
+    const suggestedPurchase = record.selling_unit?.trim() || 'علبة';
+    const suggestedFactor = Number(record.pack_size);
+    setCatalogDraft(record);
+    setDraftTradeName(record.trade_name_ar || '');
+    setDraftBaseUnit(suggestedBase);
+    setDraftPurchaseUnit(suggestedPurchase === suggestedBase ? 'علبة' : suggestedPurchase);
+    setDraftConversionFactor(String(Number.isFinite(suggestedFactor) && suggestedFactor > 1 ? suggestedFactor : 10));
+    setDraftSellingPrice('0');
+  };
+
+  const confirmCatalogDraft = () => {
+    if (!catalogDraft) return;
+    const tradeName = draftTradeName.trim();
+    const baseUnit = draftBaseUnit.trim();
+    const purchaseUnit = draftPurchaseUnit.trim();
+    const factor = Number(draftConversionFactor);
+    const sellingPrice = Number(draftSellingPrice);
+    if (!tradeName || !baseUnit || !purchaseUnit) {
+      showAlert('بيانات ناقصة', 'أدخل اسم الدواء ووحدة المخزون ووحدة الشراء.');
+      return;
+    }
+    if (purchaseUnit !== baseUnit && (!Number.isFinite(factor) || factor <= 1 || !Number.isInteger(factor))) {
+      showAlert('معامل تحويل غير صحيح', 'أدخل عدد وحدات المخزون الموجودة في وحدة الشراء، مثل 10 حبات في الشريط أو 100 حبة في العلبة.');
+      return;
+    }
+    if (!Number.isFinite(sellingPrice) || sellingPrice < 0) {
+      showAlert('سعر غير صحيح', 'سعر البيع يجب أن يكون صفرًا أو أكثر.');
+      return;
+    }
+
     const product = addProduct({
       barcode: null,
       internal_code: null,
-      trade_name: record.trade_name_ar,
-      generic_name: record.generic_name || null,
-      active_ingredient: record.active_ingredient || null,
-      strength: record.strength || null,
-      dosage_form: record.dosage_form || null,
-      manufacturer: record.manufacturer_name || null,
-      category: record.category_ar || null,
+      trade_name: tradeName,
+      generic_name: catalogDraft.generic_name || null,
+      active_ingredient: catalogDraft.active_ingredient || null,
+      strength: catalogDraft.strength || null,
+      dosage_form: catalogDraft.dosage_form || null,
+      manufacturer: catalogDraft.manufacturer_name || null,
+      category: catalogDraft.category_ar || null,
       prescription_required: false,
       controlled: false,
       inventory_unit: baseUnit,
       minimum_stock: 0,
       reorder_level: 0,
-      selling_price: 0,
+      selling_price: sellingPrice,
       default_purchase_price: 0,
       active: true,
-      notes: 'أُنشئ من كتالوج الأدوية؛ يجب إدخال الأسعار الفعلية ومراجعة الوحدات.',
-      catalog_source_id: record.source_id,
+      notes: 'أُنشئ من كتالوج الأدوية؛ تمت مراجعة وحدة المخزون ووحدة الشراء يدويًا.',
+      catalog_source_id: catalogDraft.source_id,
     });
+
+    if (purchaseUnit !== baseUnit) {
+      addProductUnit({
+        product_id: product.id,
+        unit_name: purchaseUnit,
+        conversion_factor: factor,
+        parent_unit_name: baseUnit,
+        quantity_per_parent: factor,
+        sale_price: null,
+        purchase_price: null,
+        is_purchase_default: true,
+        is_sale_default: false,
+      });
+    }
+    setCatalogDraft(null);
     setShowCatalogPicker(false);
     setCatalogQuery('');
     addItem(product);
-    showAlert('تمت إضافة الدواء', 'أُضيف الاسم المرجعي إلى فاتورة الشراء. أدخل تكلفة الشراء الفعلية ورقم الدفعة وتاريخ الانتهاء والكمية، وحدد سعر البيع قبل صرف الدواء.');
+    // Set the purchase line to the confirmed package unit and show its converted cost.
+    setItems(prev => prev.map((item, index) => index === 0 && item.product.id === product.id
+      ? { ...item, unit: purchaseUnit, purchase_price: '0' }
+      : item));
+    showAlert('تمت إضافة الدواء', 'تمت إضافة الدواء بعد مراجعة وحداته. أدخل تكلفة وحدة الشراء الفعلية ورقم الدفعة وتاريخ الانتهاء والكمية قبل حفظ الفاتورة.');
   };
 
   const updateItem = (index: number, field: keyof PurchaseLineItem, value: any) => {
@@ -438,6 +493,42 @@ export default function AddPurchaseScreen() {
             )}
           </View>
         </View>
+      </Modal>
+      
+      {/* Review and edit catalog medicine before creating the pharmacy product */}
+      <Modal visible={!!catalogDraft} animationType="slide" transparent onRequestClose={() => setCatalogDraft(null)}>
+        <KeyboardAvoidingView style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'flex-end' }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          <View style={{ backgroundColor: theme.colors.surface, borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 16, paddingBottom: insets.bottom + 18, maxHeight: '88%' }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+              <TouchableOpacity onPress={() => setCatalogDraft(null)}><MaterialIcons name="close" size={22} color={theme.colors.textPrimary} /></TouchableOpacity>
+              <Text style={{ fontSize: 16, fontWeight: '800', color: theme.colors.textPrimary }}>مراجعة الدواء ووحداته</Text>
+              <MaterialIcons name="edit" size={22} color={theme.colors.primary} />
+            </View>
+            <ScrollView keyboardShouldPersistTaps="handled">
+              <Text style={{ color: theme.colors.textSecondary, fontSize: 12, textAlign: 'right', marginBottom: 5 }}>اسم الدواء التجاري</Text>
+              <TextInput value={draftTradeName} onChangeText={setDraftTradeName} style={[inputSm, { height: 44, textAlign: 'right', marginBottom: 10 }]} />
+              <Text style={{ color: theme.colors.textSecondary, fontSize: 12, textAlign: 'right', marginBottom: 5 }}>وحدة المخزون الأساسية (أصغر وحدة)</Text>
+              <TextInput value={draftBaseUnit} onChangeText={setDraftBaseUnit} placeholder="مثال: حبة" style={[inputSm, { height: 44, textAlign: 'right', marginBottom: 10 }]} />
+              <Text style={{ color: theme.colors.textSecondary, fontSize: 12, textAlign: 'right', marginBottom: 5 }}>وحدة الشراء التي ستظهر في الفاتورة</Text>
+              <TextInput value={draftPurchaseUnit} onChangeText={setDraftPurchaseUnit} placeholder="مثال: شريط أو علبة" style={[inputSm, { height: 44, textAlign: 'right', marginBottom: 10 }]} />
+              {draftPurchaseUnit.trim() !== draftBaseUnit.trim() && <>
+                <Text style={{ color: theme.colors.textSecondary, fontSize: 12, textAlign: 'right', marginBottom: 5 }}>كم وحدة مخزون داخل وحدة الشراء؟</Text>
+                <TextInput value={draftConversionFactor} onChangeText={setDraftConversionFactor} keyboardType="numeric" placeholder="مثال: 10 حبات في الشريط" style={[inputSm, { height: 44, textAlign: 'right', marginBottom: 6 }]} />
+                <Text style={{ fontSize: 11, textAlign: 'right', color: theme.colors.textTertiary, marginBottom: 10 }}>مثال: وحدة المخزون «حبة»، وحدة الشراء «شريط»، ومعامل التحويل 10 يعني أن كل شريط يضيف 10 حبات للمخزون.</Text>
+              </>}
+              <Text style={{ color: theme.colors.textSecondary, fontSize: 12, textAlign: 'right', marginBottom: 5 }}>سعر بيع وحدة المخزون (اختياري الآن)</Text>
+              <TextInput value={draftSellingPrice} onChangeText={setDraftSellingPrice} keyboardType="decimal-pad" placeholder="0" style={[inputSm, { height: 44, textAlign: 'right', marginBottom: 14 }]} />
+              <View style={{ backgroundColor: theme.colors.surfaceAlt, borderRadius: 10, padding: 10, marginBottom: 14 }}>
+                <Text style={{ textAlign: 'right', fontSize: 12, color: theme.colors.textSecondary }}>المعلومات المرجعية: {[catalogDraft?.strength, catalogDraft?.dosage_form, catalogDraft?.manufacturer_name].filter(Boolean).join(' · ') || 'لا توجد تفاصيل إضافية'}</Text>
+                <Text style={{ textAlign: 'right', fontSize: 12, color: theme.colors.textSecondary, marginTop: 5 }}>لن يُسجّل مخزون أو سعر شراء من الكتالوج؛ ستدخل التكلفة الفعلية في سطر الفاتورة.</Text>
+              </View>
+              <TouchableOpacity onPress={confirmCatalogDraft} style={{ height: 48, borderRadius: 10, backgroundColor: '#6554C0', alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8 }}>
+                <MaterialIcons name="check-circle" size={19} color="#FFFFFF" />
+                <Text style={{ color: '#FFFFFF', fontWeight: '800', fontSize: 14 }}>تأكيد الدواء وإضافته للفاتورة</Text>
+              </TouchableOpacity>
+            </ScrollView>
+          </View>
+        </KeyboardAvoidingView>
       </Modal>
     </View>
   );
