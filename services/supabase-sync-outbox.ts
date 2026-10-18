@@ -1,0 +1,162 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { getSharedSupabaseClient } from '../template/core/client';
+
+const OUTBOX_KEY = '@pharmacy_accounts/supabase-sync-outbox/v1';
+const MAX_ATTEMPTS = 8;
+
+export type SyncEntityType =
+  | 'product' | 'product_unit' | 'batch' | 'stock_movement'
+  | 'sale' | 'sale_item' | 'sale_payment' | 'sale_return'
+  | 'purchase' | 'purchase_item' | 'purchase_return'
+  | 'customer' | 'supplier' | 'cash_transaction' | 'shift'
+  | 'expense' | 'audit_log';
+
+export interface SyncOutboxEvent {
+  event_id: string;
+  client_id: string;
+  entity_type: SyncEntityType;
+  entity_id: string;
+  operation: 'upsert' | 'delete';
+  schema_version: number;
+  payload: Record<string, unknown>;
+  client_created_at: string;
+  attempts: number;
+  last_error?: string;
+}
+
+export interface SyncFlushResult {
+  sent: number;
+  failed: number;
+  skipped: boolean;
+  reason?: string;
+}
+
+function createUuid(): string {
+  // Expo Crypto is already a project dependency. UUIDs are generated locally
+  // so retries retain the same idempotency key.
+  const bytes = Array.from({ length: 16 }, () => Math.floor(Math.random() * 256));
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = bytes.map((b) => b.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+let queueWrites: Promise<void> = Promise.resolve();
+
+async function readQueue(): Promise<SyncOutboxEvent[]> {
+  const raw = await AsyncStorage.getItem(OUTBOX_KEY);
+  if (!raw) return [];
+  const parsed: unknown = JSON.parse(raw);
+  if (!Array.isArray(parsed)) throw new Error('Sync outbox data is invalid');
+  return parsed as SyncOutboxEvent[];
+}
+
+async function writeQueue(events: SyncOutboxEvent[]): Promise<void> {
+  queueWrites = queueWrites.catch(() => undefined).then(() => AsyncStorage.setItem(OUTBOX_KEY, JSON.stringify(events)));
+  await queueWrites;
+}
+
+/**
+ * Queue an event for transport. Call this only after the corresponding business
+ * mutation is durably committed. This utility is not yet wired into ERP mutations.
+ * Never queue passwords, auth tokens, or service-role credentials in payload.
+ */
+export async function enqueueSyncEvent(input: {
+  client_id: string;
+  entity_type: SyncEntityType;
+  entity_id: string | number;
+  operation: 'upsert' | 'delete';
+  payload?: Record<string, unknown>;
+}): Promise<string> {
+  if (!input.client_id.trim()) throw new Error('A stable device/client ID is required');
+  if (!String(input.entity_id).trim()) throw new Error('Entity ID is required');
+
+  const event: SyncOutboxEvent = {
+    event_id: createUuid(),
+    client_id: input.client_id,
+    entity_type: input.entity_type,
+    entity_id: String(input.entity_id),
+    operation: input.operation,
+    schema_version: 1,
+    payload: input.payload ?? {},
+    client_created_at: new Date().toISOString(),
+    attempts: 0,
+  };
+  const queue = await readQueue();
+  queue.push(event);
+  await writeQueue(queue);
+  return event.event_id;
+}
+
+/**
+ * Uploads queued transport events only. This does NOT apply the event payload
+ * to operational tables and therefore must not be presented as completed ERP sync.
+ * Requires a signed-in user with an active pharmacy_profiles row and the migration
+ * 006 proposal applied in a disposable/staging database.
+ */
+export async function flushSyncOutbox(limit = 25): Promise<SyncFlushResult> {
+  const client = getSharedSupabaseClient();
+  const { data: authData, error: authError } = await client.auth.getUser();
+  const user = authData?.user;
+  if (authError || !user) return { sent: 0, failed: 0, skipped: true, reason: 'AUTH_REQUIRED' };
+
+  const { data: profile, error: profileError } = await client
+    .from('pharmacy_profiles')
+    .select('pharmacy_id, active')
+    .eq('id', user.id)
+    .maybeSingle();
+
+  if (profileError || !profile?.pharmacy_id || profile.active !== true) {
+    return { sent: 0, failed: 0, skipped: true, reason: 'ACTIVE_PHARMACY_PROFILE_REQUIRED' };
+  }
+
+  const queue = await readQueue();
+  const pending = queue.filter((event) => event.attempts < MAX_ATTEMPTS).slice(0, Math.max(1, limit));
+  let sent = 0;
+  let failed = 0;
+  const sentIds = new Set<string>();
+  const errors = new Map<string, string>();
+
+  for (const event of pending) {
+    const { error } = await client.from('pharmacy_sync_events').upsert({
+      pharmacy_id: profile.pharmacy_id,
+      event_id: event.event_id,
+      client_id: event.client_id,
+      entity_type: event.entity_type,
+      entity_id: event.entity_id,
+      operation: event.operation,
+      schema_version: event.schema_version,
+      payload: event.payload,
+      actor_id: user.id,
+      client_created_at: event.client_created_at,
+    }, { onConflict: 'pharmacy_id,event_id', ignoreDuplicates: true });
+
+    if (error) {
+      failed += 1;
+      errors.set(event.event_id, error.message.slice(0, 500));
+    } else {
+      sent += 1;
+      sentIds.add(event.event_id);
+    }
+  }
+
+  const remaining = queue
+    .filter((event) => !sentIds.has(event.event_id))
+    .map((event) => {
+      const error = errors.get(event.event_id);
+      if (!error) return event;
+      return { ...event, attempts: event.attempts + 1, last_error: error };
+    });
+  await writeQueue(remaining);
+
+  return { sent, failed, skipped: false };
+}
+
+/** Returns safe queue metadata only; payloads are intentionally omitted. */
+export async function getSyncOutboxStatus(): Promise<{ pending: number; exhausted: number }> {
+  const queue = await readQueue();
+  return {
+    pending: queue.filter((event) => event.attempts < MAX_ATTEMPTS).length,
+    exhausted: queue.filter((event) => event.attempts >= MAX_ATTEMPTS).length,
+  };
+}
