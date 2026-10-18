@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Crypto from 'expo-crypto';
 import { getSharedSupabaseClient } from '../template/core/client';
 
 const OUTBOX_KEY = '@pharmacy_accounts/supabase-sync-outbox/v1';
@@ -32,13 +33,8 @@ export interface SyncFlushResult {
 }
 
 function createUuid(): string {
-  // Expo Crypto is already a project dependency. UUIDs are generated locally
-  // so retries retain the same idempotency key.
-  const bytes = Array.from({ length: 16 }, () => Math.floor(Math.random() * 256));
-  bytes[6] = (bytes[6] & 0x0f) | 0x40;
-  bytes[8] = (bytes[8] & 0x3f) | 0x80;
-  const hex = bytes.map((b) => b.toString(16).padStart(2, '0')).join('');
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  // Persisted event IDs stay stable across retries; Expo Crypto supplies UUIDs.
+  return Crypto.randomUUID();
 }
 
 let queueWrites: Promise<void> = Promise.resolve();
