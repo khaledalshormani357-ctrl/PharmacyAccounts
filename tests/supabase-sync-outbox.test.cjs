@@ -92,6 +92,29 @@ test('failed upload retains event and records retry metadata', async () => {
   eventUpload = async () => ({ error: null });
 });
 
+test('overlapping flush calls share one network upload pass', async () => {
+  persistedQueue = null;
+  await outbox.enqueueSyncEvent(input('single-flight'));
+  let calls = 0;
+  let beginUpload;
+  let finishUpload;
+  const uploadStarted = new Promise(resolve => { beginUpload = resolve; });
+  const uploadGate = new Promise(resolve => { finishUpload = resolve; });
+  eventUpload = async () => { calls += 1; beginUpload(); await uploadGate; return { error: null }; };
+
+  const first = outbox.flushSyncOutbox();
+  await uploadStarted;
+  const second = outbox.flushSyncOutbox();
+  finishUpload();
+  const results = await Promise.all([first, second]);
+
+  assert.equal(calls, 1);
+  assert.equal(results[0].sent, 1);
+  assert.equal(results[1].sent, 1);
+  assert.equal(queueRows().length, 0);
+  eventUpload = async () => ({ error: null });
+});
+
 test('missing authentication leaves queued events untouched', async () => {
   persistedQueue = null;
   await outbox.enqueueSyncEvent(input('auth'));
