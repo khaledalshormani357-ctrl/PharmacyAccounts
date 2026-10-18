@@ -12,10 +12,12 @@ Status: partial foundation only. No live Supabase database was changed. No opera
 
 ## Change in this branch
 - `supabase/006_sync_transport_ledger_proposal.sql` proposes an immutable, tenant-scoped event transport ledger with event idempotency, client ID, schema version, actor, timestamps, and RLS.
-- This is a **proposal only**. It has not been applied to any Supabase project, and there is no client worker writing to or reading from this table.
+- `services/supabase-sync-outbox.ts` adds a local AsyncStorage outbox, profile/auth checks, and an uploader for queued events to the proposed ledger. Event IDs are generated with Expo Crypto and retries reuse the stored ID.
+- The outbox/uploader is **not wired into ERP mutations**, and the ledger proposal has not been applied to any Supabase project. The uploader records event envelopes only; it does not apply payloads to operational tables and does not pull remote changes.
 - Its payload is untrusted input. It must not be replayed directly into inventory, sales, balances, or financial tables. RLS prevents cross-pharmacy access only if the existing profile mapping and `current_pharmacy_id()` are correctly configured; that has not been runtime-tested here.
 
 ## Required before operational sync can be called complete
+0. Wire the outbox into each successful business mutation, atomically with the durable local write; currently no business mutation calls `enqueueSyncEvent()`.
 1. Define and migrate a tenant-scoped operational schema for every aggregate and child row. Preserve relationships and constraints; do not upload/overwrite the entire local snapshot.
 2. Introduce a tested stable local-to-cloud ID mapping; do not assume numeric local IDs equal cloud UUIDs.
 3. Add a durable local outbox with event UUID/idempotency key, entity type/id, operation, schema version, timestamps, retry count, and error state. Enqueue in the same durable local transaction as each business operation.
