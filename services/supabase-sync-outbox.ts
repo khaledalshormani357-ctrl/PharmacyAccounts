@@ -106,7 +106,21 @@ export async function enqueueSyncEvent(input: {
  * Requires a signed-in user with an active pharmacy_profiles row and the migration
  * 006 proposal applied in a disposable/staging database.
  */
+let flushInFlight: Promise<SyncFlushResult> | null = null;
+
+/** Avoid duplicate overlapping flushes from app foreground/reconnect triggers. */
 export async function flushSyncOutbox(limit = 25): Promise<SyncFlushResult> {
+  if (flushInFlight) return flushInFlight;
+  const currentFlush = flushSyncOutboxOnce(limit);
+  flushInFlight = currentFlush;
+  try {
+    return await currentFlush;
+  } finally {
+    if (flushInFlight === currentFlush) flushInFlight = null;
+  }
+}
+
+async function flushSyncOutboxOnce(limit: number): Promise<SyncFlushResult> {
   const client = getSharedSupabaseClient();
   const { data: authData, error: authError } = await client.auth.getUser();
   const user = authData?.user;
