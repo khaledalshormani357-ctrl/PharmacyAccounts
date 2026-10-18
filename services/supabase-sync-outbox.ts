@@ -37,7 +37,22 @@ function createUuid(): string {
   return Crypto.randomUUID();
 }
 
-let queueWrites: Promise<void> = Promise.resolve();
+// Serialize every read-modify-write operation. Serializing only setItem() is not
+// enough: two concurrent enqueue calls could both read the same queue and one
+// would overwrite the other's event.
+let queueMutation: Promise<void> = Promise.resolve();
+
+async function withQueueLock<T>(work: () => Promise<T>): Promise<T> {
+  let release!: () => void;
+  const previous = queueMutation;
+  queueMutation = new Promise<void>((resolve) => { release = resolve; });
+  await previous.catch(() => undefined);
+  try {
+    return await work();
+  } finally {
+    release();
+  }
+}
 
 async function readQueue(): Promise<SyncOutboxEvent[]> {
   const raw = await AsyncStorage.getItem(OUTBOX_KEY);
@@ -48,8 +63,7 @@ async function readQueue(): Promise<SyncOutboxEvent[]> {
 }
 
 async function writeQueue(events: SyncOutboxEvent[]): Promise<void> {
-  queueWrites = queueWrites.catch(() => undefined).then(() => AsyncStorage.setItem(OUTBOX_KEY, JSON.stringify(events)));
-  await queueWrites;
+  await AsyncStorage.setItem(OUTBOX_KEY, JSON.stringify(events));
 }
 
 /**
@@ -78,9 +92,11 @@ export async function enqueueSyncEvent(input: {
     client_created_at: new Date().toISOString(),
     attempts: 0,
   };
-  const queue = await readQueue();
-  queue.push(event);
-  await writeQueue(queue);
+  await withQueueLock(async () => {
+    const queue = await readQueue();
+    queue.push(event);
+    await writeQueue(queue);
+  });
   return event.event_id;
 }
 
@@ -136,14 +152,20 @@ export async function flushSyncOutbox(limit = 25): Promise<SyncFlushResult> {
     }
   }
 
-  const remaining = queue
-    .filter((event) => !sentIds.has(event.event_id))
-    .map((event) => {
-      const error = errors.get(event.event_id);
-      if (!error) return event;
-      return { ...event, attempts: event.attempts + 1, last_error: error };
-    });
-  await writeQueue(remaining);
+  // Merge acknowledgements into the latest queue under the same lock used by
+  // enqueue. Never replace it with the earlier snapshot: events queued while the
+  // network requests were in flight must survive this flush.
+  await withQueueLock(async () => {
+    const latestQueue = await readQueue();
+    const remaining = latestQueue
+      .filter((event) => !sentIds.has(event.event_id))
+      .map((event) => {
+        const error = errors.get(event.event_id);
+        if (!error) return event;
+        return { ...event, attempts: event.attempts + 1, last_error: error };
+      });
+    await writeQueue(remaining);
+  });
 
   return { sent, failed, skipped: false };
 }
