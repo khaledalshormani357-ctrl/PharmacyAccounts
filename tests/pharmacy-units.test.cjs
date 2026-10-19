@@ -696,9 +696,9 @@ test('stocktake applies multiple batch differences atomically and records explic
   assert.equal(result.success, true);
   assert.equal(result.applied, 2);
   assert.deepEqual(db.getBatches(medicine.id, false).map(b => b.quantity).sort((a, b) => a - b), [8, 12]);
-  const movements = db.getStockMovements(medicine.id).slice(0, 2);
+  const movements = db.getStockMovements(medicine.id).filter(m => m.reference_type === 'stocktake');
   assert.equal(movements.length, 2);
-  assert.ok(movements.every(m => m.reference_type === 'stocktake'));
+  assert.ok(movements.every(m => m.type === 'ADJUSTMENT_IN' || m.type === 'ADJUSTMENT_OUT'));
   assert.equal(db.getStockMovements(medicine.id).length, beforeMovements + 2);
 });
 
