@@ -8,7 +8,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useTheme } from '@/contexts/ThemeContext';
-import { addProduct, addProductUnit, updateProduct, createPurchase, getProductUnits, getProductByCatalogSourceId, getSuppliers, getProducts, getSetting, getUnitPrice, flushDatabaseWrites, Supplier, Product } from '@/services/database';
+import { addProduct, configureProductPurchaseUnit, updateProduct, createPurchase, getProductUnits, getProductByCatalogSourceId, getSuppliers, getProducts, getSetting, getUnitPrice, flushDatabaseWrites, Supplier, Product } from '@/services/database';
 import { getLocalDrugCatalog, refreshRemoteDrugCatalog, DrugCatalogRecord } from '@/services/drug-catalog';
 import { searchDrugCatalog } from '@/services/drug-catalog-utils';
 import { formatCurrency, getToday } from '@/constants/i18n';
@@ -132,7 +132,11 @@ export default function AddPurchaseScreen() {
     const factor = Number(draftConversionFactor);
     const sellingPrice = Number(draftSellingPrice);
     if (!tradeName || !baseUnit || !purchaseUnit) {
-      showAlert('بيانات ناقصة', 'أدخل اسم الدواء ووحدة الشراء. وحدة المخزون الأساسية للدواء الموجود لا يمكن تغييرها حتى لا تتغير أرصدة الدفعات السابقة.');
+      showAlert('بيانات ناقصة', 'أدخل اسم الدواء ووحدة الشراء.');
+      return;
+    }
+    if (catalogExistingProduct && baseUnit !== catalogExistingProduct.inventory_unit) {
+      showAlert('تغيير وحدة المخزون غير مسموح', 'لا يمكن تغيير وحدة المخزون الأساسية لدواء موجود؛ حتى لا تتغير أرصدة الدفعات والحركات السابقة.');
       return;
     }
     if (purchaseUnit !== baseUnit && (!Number.isFinite(factor) || factor <= 1 || !Number.isInteger(factor))) {
@@ -146,25 +150,15 @@ export default function AddPurchaseScreen() {
 
     let product = catalogExistingProduct;
     if (product) {
+      const configuredUnit = configureProductPurchaseUnit(product.id, purchaseUnit, factor, baseUnit);
+      if (!configuredUnit) {
+        showAlert('تعذر تحديث وحدة الشراء', 'لم تُحفظ الوحدة لأن معاملها غير صالح أو لأن وحدات أخرى تعتمد عليها. اختر اسم وحدة جديدًا أو راجع تعريفات الوحدات أولًا.');
+        return;
+      }
       // Keep the existing stock base unit authoritative; changing it could corrupt
-      // historical quantities. The trade name and missing purchase-unit definition
-      // can be corrected safely from this review step.
+      // historical quantities. Update the selected unit without rewriting old transactions.
       updateProduct(product.id, { trade_name: tradeName, selling_price: sellingPrice });
       product = { ...product, trade_name: tradeName, selling_price: sellingPrice };
-      const existingUnit = getProductUnits(product.id).find(unit => unit.unit_name === purchaseUnit);
-      if (purchaseUnit !== baseUnit && !existingUnit) {
-        addProductUnit({
-          product_id: product.id,
-          unit_name: purchaseUnit,
-          conversion_factor: factor,
-          parent_unit_name: baseUnit,
-          quantity_per_parent: factor,
-          sale_price: null,
-          purchase_price: null,
-          is_purchase_default: true,
-          is_sale_default: false,
-        });
-      }
     } else {
       product = addProduct({
         barcode: null,
@@ -187,18 +181,10 @@ export default function AddPurchaseScreen() {
         notes: 'أُنشئ من كتالوج الأدوية؛ تمت مراجعة وحدة المخزون ووحدة الشراء يدويًا.',
         catalog_source_id: catalogDraft.source_id,
       });
-      if (purchaseUnit !== baseUnit) {
-        addProductUnit({
-          product_id: product.id,
-          unit_name: purchaseUnit,
-          conversion_factor: factor,
-          parent_unit_name: baseUnit,
-          quantity_per_parent: factor,
-          sale_price: null,
-          purchase_price: null,
-          is_purchase_default: true,
-          is_sale_default: false,
-        });
+      const configuredUnit = configureProductPurchaseUnit(product.id, purchaseUnit, factor, baseUnit);
+      if (!configuredUnit) {
+        showAlert('تعذر إعداد وحدة الشراء', 'لم يتم اعتماد تعريف الوحدة. راجع اسم الوحدة ومعامل التحويل ثم أعد المحاولة.');
+        return;
       }
     }
     setCatalogDraft(null);
