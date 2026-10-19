@@ -92,7 +92,7 @@ export default function MoreScreen() {
         </Section>
 
         <Section title="النظام">
-          <MenuItem icon="manage-accounts" label="المستخدمون" color="#0052CC" onPress={() => router.push('/settings')} />
+          <MenuItem icon="manage-accounts" label="المستخدمون" color="#0052CC" onPress={() => router.push('/users' as any)} />
           <MenuItem icon="history" label="سجل التدقيق" color="#5E6C84" onPress={() => router.push('/audit-log')} />
           <MenuItem icon="backup" label="النسخ الاحتياطي" color="#00875A" onPress={() => router.push('/backup')} />
           <MenuItem icon="settings" label="الإعدادات" onPress={() => router.push('/settings')} />
