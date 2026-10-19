@@ -1592,7 +1592,11 @@ export function cancelSale(id: number, reason: string, user_id?: number): void {
           const batch = store.batches.find(b => b.id === alloc.batch_id);
           if (batch) {
             batch.quantity += alloc.quantity_allocated;
-            batch.status = batch.expiry_date && batch.expiry_date <= today() ? 'EXPIRED' : 'ACTIVE';
+            // Cancellation must not make recalled stock sellable again.
+            if (batch.status !== 'RECALLED') {
+              batch.status = batch.quantity <= 1e-8 ? 'DEPLETED'
+                : batch.expiry_date && batch.expiry_date <= today() ? 'EXPIRED' : 'ACTIVE';
+            }
           }
           store.stockMovements.push({
             id: ids.stockMovements++,
