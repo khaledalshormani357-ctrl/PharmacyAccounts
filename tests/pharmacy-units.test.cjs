@@ -642,3 +642,41 @@ test('manual stock adjustment requires a reason and persists a valid quantity ch
   assert.equal(db.getBatches(medicine.id, false).find(item => item.id === batch.id).quantity, 8);
   assert.equal(db.getStockMovements(medicine.id).find(item => item.type === 'ADJUSTMENT_OUT').quantity, -2);
 });
+
+
+test('free supplier samples increase batch stock without creating purchases, payables, cash or revenue', () => {
+  const supplier = db.addSupplier({ name: 'Free sample supplier' });
+  const medicine = product('Free sample transaction example', 12);
+  configure(medicine.id);
+  const cashBefore = db.getCashTransactions().length;
+  const purchasesBefore = db.getPurchases().length;
+  const supplierBefore = db.getSupplier(supplier.id).balance;
+  const reportBefore = db.getReportSummary('2026-10-20', '2026-10-20');
+  const result = db.createFreeSampleReceipt({
+    product_id: medicine.id, unit: 'Box', quantity: 2, unit_cost: 100,
+    batch_number: 'SAMPLE-2026', expiry_date: '2027-12-31', supplier_id: supplier.id,
+    reason: 'اختبار عينة مجانية',
+  });
+  assert.equal(result.success, true);
+  assert.equal(result.base_quantity, 200);
+  assert.equal(db.getProductStock(medicine.id), 200);
+  assert.equal(db.getPurchases().length, purchasesBefore);
+  assert.equal(db.getCashTransactions().length, cashBefore);
+  assert.equal(db.getSupplier(supplier.id).balance, supplierBefore);
+  assert.equal(db.getStockMovements(medicine.id).find(m => m.type === 'FREE_SAMPLE_IN').quantity, 200);
+  const reportAfter = db.getReportSummary('2026-10-20', '2026-10-20');
+  assert.equal(reportAfter.totalSales, reportBefore.totalSales);
+  assert.equal(db.getAuditLogs({ entity: 'batch' }).some(a => a.action === 'FREE_SAMPLE_RECEIVED'), true);
+});
+
+test('free sample receipt rejects invalid quantity, expiry and missing reason without stock changes', () => {
+  const medicine = product('Invalid free sample example');
+  configure(medicine.id);
+  const before = db.getProductStock(medicine.id);
+  const base = { product_id: medicine.id, unit: 'Tablet', quantity: 2, unit_cost: 0,
+    batch_number: 'SAMPLE-INVALID', expiry_date: '2027-12-31', reason: 'test' };
+  assert.equal(db.createFreeSampleReceipt({ ...base, quantity: 0 }).success, false);
+  assert.equal(db.createFreeSampleReceipt({ ...base, expiry_date: '2020-01-01' }).success, false);
+  assert.equal(db.createFreeSampleReceipt({ ...base, reason: ' ' }).success, false);
+  assert.equal(db.getProductStock(medicine.id), before);
+});

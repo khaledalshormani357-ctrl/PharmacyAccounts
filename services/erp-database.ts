@@ -11,7 +11,7 @@ import { withAtomicMutation } from './atomic-store';
 
 export type TransactionType =
   | 'PURCHASE' | 'SALE' | 'SALE_RETURN' | 'PURCHASE_RETURN'
-  | 'OPENING' | 'ADJUSTMENT_IN' | 'ADJUSTMENT_OUT'
+  | 'OPENING' | 'FREE_SAMPLE_IN' | 'ADJUSTMENT_IN' | 'ADJUSTMENT_OUT'
   | 'DAMAGE' | 'EXPIRED' | 'WRITE_OFF'
   | 'TRANSFER_IN' | 'TRANSFER_OUT';
 
@@ -869,6 +869,93 @@ export function hasProductStockHistory(product_id: number): boolean {
     store.stockMovements.some(movement => movement.product_id === product_id) ||
     store.saleItems.some(item => item.product_id === product_id) ||
     store.purchaseItems.some(item => item.product_id === product_id);
+}
+
+export interface FreeSampleReceiptInput {
+  product_id: number;
+  unit: string;
+  quantity: number;
+  unit_cost: number;
+  batch_number: string;
+  expiry_date: string;
+  supplier_id?: number | null;
+  user_id?: number | null;
+  reason: string;
+}
+
+export type FreeSampleReceiptResult =
+  | { success: true; batch: Batch; base_quantity: number }
+  | { success: false; error: string };
+
+/**
+ * Receives supplier samples as inventory only: it never creates a purchase,
+ * supplier payable, cash transaction, or sales revenue.
+ */
+export function createFreeSampleReceipt(data: FreeSampleReceiptInput): FreeSampleReceiptResult {
+  const product = getProduct(data.product_id);
+  if (!product) return { success: false, error: 'الدواء غير موجود' };
+  const factor = getUnitConversionFactor(data.product_id, data.unit);
+  if (factor === null) return { success: false, error: `الوحدة ${data.unit} غير معرفة لهذا الدواء` };
+  if (!isValidUnitQuantity(data.quantity, data.unit) || data.quantity <= 0) {
+    return { success: false, error: 'أدخل كمية عينة صحيحة أكبر من صفر' };
+  }
+  if (!Number.isFinite(data.unit_cost) || data.unit_cost < 0) {
+    return { success: false, error: 'أدخل تكلفة تقديرية صحيحة للعينة' };
+  }
+  const batchNumber = data.batch_number?.trim();
+  if (!batchNumber) return { success: false, error: 'أدخل رقم التشغيلة' };
+  if (!isValidIsoDate(data.expiry_date) || data.expiry_date < today()) {
+    return { success: false, error: 'تاريخ انتهاء العينة غير صحيح أو منقضٍ' };
+  }
+  if (!data.reason?.trim()) return { success: false, error: 'أدخل سبب استلام العينة' };
+  if (data.supplier_id != null && !store.suppliers.some(s => s.id === data.supplier_id)) {
+    return { success: false, error: 'المورد المحدد غير موجود' };
+  }
+
+  const baseQuantity = toBaseQuantity(data.quantity, factor);
+  return commitReturnAtomically(() => {
+    let batch = store.batches.find(b =>
+      b.product_id === product.id && b.batch_number === batchNumber &&
+      b.expiry_date === data.expiry_date && b.status === 'ACTIVE'
+    );
+    if (batch) {
+      const beforeQuantity = batch.quantity;
+      batch.purchase_price = beforeQuantity + baseQuantity > 0
+        ? ((batch.purchase_price * beforeQuantity) + ((data.unit_cost / factor) * baseQuantity)) / (beforeQuantity + baseQuantity)
+        : data.unit_cost / factor;
+      batch.quantity += baseQuantity;
+      batch.initial_quantity += baseQuantity;
+    } else {
+      batch = {
+        id: ids.batches++, product_id: product.id, batch_number: batchNumber,
+        expiry_date: data.expiry_date, received_date: today(),
+        purchase_price: data.unit_cost / factor, selling_price: product.selling_price,
+        quantity: baseQuantity, initial_quantity: baseQuantity,
+        supplier_id: data.supplier_id ?? null, purchase_id: null, status: 'ACTIVE',
+        notes: 'عينة مجانية من المورد', is_opening: false, created_at: now(),
+      };
+      store.batches.push(batch);
+    }
+    store.stockMovements.push({
+      id: ids.stockMovements++, product_id: product.id, batch_id: batch.id,
+      type: 'FREE_SAMPLE_IN', quantity: baseQuantity, unit: product.inventory_unit,
+      quantity_in_inventory_unit: baseQuantity, reference_type: 'free_sample',
+      reference_id: batch.id,
+      note: `عينة مجانية؛ الكمية: ${data.quantity} ${data.unit}؛ السبب: ${data.reason.trim()}`,
+      user_id: data.user_id ?? null, created_at: now(),
+    });
+    addAuditLog({
+      action: 'FREE_SAMPLE_RECEIVED', entity: 'batch', entity_id: batch.id,
+      user_id: data.user_id ?? null,
+      after_data: JSON.stringify({
+        product_id: product.id, batch_number: batchNumber, expiry_date: data.expiry_date,
+        supplier_id: data.supplier_id ?? null, quantity: data.quantity, unit: data.unit,
+        base_quantity: baseQuantity, estimated_unit_cost: data.unit_cost,
+        reason: data.reason.trim(), supplier_balance_changed: false,
+      }),
+    });
+    return { success: true as const, batch, base_quantity: baseQuantity };
+  });
 }
 
 export interface OpeningStockInput {
