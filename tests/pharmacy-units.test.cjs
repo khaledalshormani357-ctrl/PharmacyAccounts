@@ -441,6 +441,27 @@ test('returns preserve recalled batch state instead of reactivating recalled sto
   assert.equal(db.getProductStock(purchaseMedicine.id), 0);
 });
 
+test('cancelling a sale never reactivates a recalled batch', () => {
+  const medicine = product('Recalled sale cancellation example');
+  configure(medicine.id);
+  buy(medicine.id, 'RECALLED-CANCEL', '2027-12-31', 1, 'Box', 1000);
+  const sale = db.createSale({
+    sale_type: 'cash',
+    items: [{ product_id: medicine.id, unit: 'Tablet', quantity: 1, unit_price: 15, discount: 0 }],
+    discount: 0,
+    amount_paid: 15,
+  });
+  assert.equal(sale.success, true);
+  const saleBatch = db.getBatches(medicine.id, false)[0];
+  saleBatch.status = 'RECALLED';
+
+  db.cancelSale(sale.sale.id, 'test recalled batch protection');
+
+  assert.equal(db.getSale(sale.sale.id).cancelled, true);
+  assert.equal(db.getBatches(medicine.id, false).find(batch => batch.id === saleBatch.id).status, 'RECALLED');
+  assert.equal(db.getProductStock(medicine.id), 0);
+});
+
 test('a late cash sale return is assigned to the currently open shift, not the original closed shift', () => {
   const medicine = product('Shift allocation return example');
   configure(medicine.id);
