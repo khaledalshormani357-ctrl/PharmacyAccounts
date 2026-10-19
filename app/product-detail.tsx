@@ -54,13 +54,17 @@ export default function ProductDetailScreen() {
     if (!adjustBatch || !adjustQty.trim()) return;
     const qty = parseFloat(adjustQty);
     if (isNaN(qty)) { showAlert('خطأ', 'أدخل كمية صحيحة'); return; }
-    adjustStock({
+    const result = adjustStock({
       product_id: parseInt(id!),
       batch_id: adjustBatch.id,
       quantity_change: qty,
       type: qty > 0 ? 'ADJUSTMENT_IN' : 'ADJUSTMENT_OUT',
-      note: adjustNote || 'تعديل يدوي',
+      note: adjustNote.trim(),
     });
+    if (!result.success) {
+      showAlert('تعذر تعديل المخزون', result.error || 'لم يتم حفظ التسوية');
+      return;
+    }
     setShowAdjust(false);
     setAdjustQty('');
     setAdjustNote('');
