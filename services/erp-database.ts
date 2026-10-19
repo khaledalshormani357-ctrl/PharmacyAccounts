@@ -966,6 +966,60 @@ export function addProductUnit(data: Omit<ProductUnit, 'id'>): ProductUnit {
   return unit;
 }
 
+export function configureProductPurchaseUnit(
+  product_id: number,
+  unit_name: string,
+  conversion_factor: number,
+  base_unit_name: string,
+): ProductUnit | null {
+  const product = getProduct(product_id);
+  const name = unit_name.trim();
+  const base = base_unit_name.trim();
+  if (!product || !name || !base || product.inventory_unit !== base) return null;
+  if (name === base) conversion_factor = 1;
+  else if (!Number.isFinite(conversion_factor) || conversion_factor <= 1 || !Number.isInteger(conversion_factor)) return null;
+
+  const productUnits = store.productUnits.filter(unit => unit.product_id === product_id);
+  let target = productUnits.find(unit => unit.unit_name === name);
+  if (target && name !== base && productUnits.some(unit => unit.parent_unit_name === name)) {
+    // Do not change a conversion factor that other configured units depend on.
+    return null;
+  }
+
+  const before = productUnits.map(unit => ({ ...unit }));
+  if (!target) {
+    target = {
+      id: ids.productUnits++,
+      product_id,
+      unit_name: name,
+      conversion_factor,
+      parent_unit_name: name === base ? null : base,
+      quantity_per_parent: conversion_factor,
+      sale_price: null,
+      purchase_price: null,
+      is_purchase_default: true,
+      is_sale_default: name === base,
+    };
+    store.productUnits.push(target);
+  } else {
+    target.conversion_factor = conversion_factor;
+    target.parent_unit_name = name === base ? null : base;
+    target.quantity_per_parent = conversion_factor;
+  }
+  for (const unit of store.productUnits) {
+    if (unit.product_id === product_id) unit.is_purchase_default = unit.unit_name === name;
+  }
+  addAuditLog({
+    action: 'PRODUCT_PURCHASE_UNIT_CONFIGURE',
+    entity: 'product',
+    entity_id: product_id,
+    before_data: JSON.stringify(before),
+    after_data: JSON.stringify(store.productUnits.filter(unit => unit.product_id === product_id)),
+  });
+  persistStore();
+  return target;
+}
+
 export function replaceProductUnits(product_id: number, units: Omit<ProductUnit, 'id' | 'product_id'>[]): ProductUnit[] {
   store.productUnits = store.productUnits.filter(u => u.product_id !== product_id);
   const saved = units.map(unit => addProductUnit({ ...unit, product_id }));
