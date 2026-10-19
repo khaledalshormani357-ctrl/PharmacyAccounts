@@ -2805,29 +2805,61 @@ export function getDashboardKpis(): DashboardKpis {
 export function adjustStock(data: {
   product_id: number; batch_id: number; quantity_change: number;
   type: TransactionType; note: string; user_id?: number;
-}): void {
+}): { success: boolean; error?: string } {
+  const product = getProduct(data.product_id);
   const batch = store.batches.find(b => b.id === data.batch_id);
-  if (!batch) return;
-  batch.quantity += data.quantity_change;
-  if (batch.quantity <= 0) { batch.quantity = 0; }
+  if (!product || !batch || batch.product_id !== product.id) {
+    return { success: false, error: 'الصنف أو الدفعة غير موجودة' };
+  }
+  if (!Number.isFinite(data.quantity_change) || data.quantity_change === 0) {
+    return { success: false, error: 'أدخل كمية صحيحة لا تساوي صفراً' };
+  }
+  const allowedType = data.quantity_change > 0
+    ? data.type === 'ADJUSTMENT_IN'
+    : ['ADJUSTMENT_OUT', 'DAMAGE', 'EXPIRED', 'WRITE_OFF'].includes(data.type);
+  if (!allowedType) return { success: false, error: 'نوع الحركة لا يتوافق مع اتجاه الكمية' };
+  if (batch.status !== 'ACTIVE') return { success: false, error: 'لا يمكن تعديل دفعة غير نشطة أو مسحوبة' };
+  if (data.quantity_change < 0 && batch.quantity + data.quantity_change < -1e-8) {
+    return { success: false, error: 'الكمية المطلوب خصمها أكبر من رصيد الدفعة' };
+  }
+  if (!data.note?.trim()) return { success: false, error: 'اكتب سبب تسوية المخزون' };
 
-  store.stockMovements.push({
-    id: ids.stockMovements++,
-    product_id: data.product_id,
-    batch_id: data.batch_id,
-    type: data.type,
-    quantity: data.quantity_change,
-    unit: getProduct(data.product_id)?.inventory_unit ?? 'قطعة',
-    quantity_in_inventory_unit: data.quantity_change,
-    reference_type: 'adjustment',
-    reference_id: null,
-    note: data.note,
-    user_id: data.user_id ?? null,
-    created_at: now(),
-  });
-
-  addAuditLog({ action: 'STOCK_ADJUST', entity: 'batch', entity_id: data.batch_id,
-    after_data: JSON.stringify({ qty: batch.quantity, note: data.note }) });
+  const result = withAtomicMutation(
+    () => JSON.stringify({ store, ids, invoiceCounter }),
+    (serialized) => {
+      const snapshot = JSON.parse(serialized) as { store: typeof store; ids: typeof ids; invoiceCounter: number };
+      Object.keys(store).forEach(key => { (store as any)[key] = (snapshot.store as any)[key]; });
+      Object.assign(ids, snapshot.ids);
+      invoiceCounter = snapshot.invoiceCounter;
+    },
+    () => {
+      const beforeQuantity = batch.quantity;
+      batch.quantity = Math.max(0, beforeQuantity + data.quantity_change);
+      if (batch.quantity <= 1e-8) batch.status = 'DEPLETED';
+      store.stockMovements.push({
+        id: ids.stockMovements++,
+        product_id: data.product_id,
+        batch_id: data.batch_id,
+        type: data.type,
+        quantity: data.quantity_change,
+        unit: product.inventory_unit,
+        quantity_in_inventory_unit: data.quantity_change,
+        reference_type: 'adjustment',
+        reference_id: null,
+        note: data.note.trim(),
+        user_id: data.user_id ?? null,
+        created_at: now(),
+      });
+      addAuditLog({ action: 'STOCK_ADJUST', entity: 'batch', entity_id: data.batch_id,
+        user_id: data.user_id ?? null,
+        before_data: JSON.stringify({ qty: beforeQuantity }),
+        after_data: JSON.stringify({ qty: batch.quantity, note: data.note.trim(), type: data.type, change: data.quantity_change }) });
+      return { success: true as const };
+    },
+    persistStore,
+  );
+  persistStore();
+  return result;
 }
 
 export function getStockMovements(product_id: number): StockMovement[] {
