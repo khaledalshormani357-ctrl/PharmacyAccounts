@@ -69,6 +69,7 @@ export default function MoreScreen() {
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 32 }}>
         <Section title="المخزون والمنتجات">
           <MenuItem icon="inventory-2" label="المخزون" sublabel="إدارة الأصناف والكميات" color="#00B8D9" onPress={() => router.push('/inventory')} />
+          <MenuItem icon="fact-check" label="الجرد الفعلي" sublabel="مطابقة رصيد كل دفعة مع الكمية الفعلية" color="#00875A" onPress={() => router.push('/stocktake' as any)} />
           <MenuItem icon="medication" label="الأصناف" sublabel="إضافة وتعديل الأدوية" color="#00B8D9" onPress={() => router.push('/add-product')} />
           <MenuItem icon="schedule" label="رادار انتهاء الصلاحية" color="#FF8B00" onPress={() => router.push('/expiry-radar')} />
           <MenuItem icon="trending-down" label="المخزون الراكد" color="#6554C0" onPress={() => router.push('/dead-stock')} />
