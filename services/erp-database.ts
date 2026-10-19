@@ -981,7 +981,8 @@ export function configureProductPurchaseUnit(
 
   const productUnits = store.productUnits.filter(unit => unit.product_id === product_id);
   let target = productUnits.find(unit => unit.unit_name === name);
-  if (target && name !== base && productUnits.some(unit => unit.parent_unit_name === name)) {
+  const hasDependentUnits = target !== undefined && productUnits.some(unit => unit.parent_unit_name === name);
+  if (target && name !== base && hasDependentUnits && target.conversion_factor !== conversion_factor) {
     // Do not change a conversion factor that other configured units depend on.
     return null;
   }
@@ -1003,8 +1004,10 @@ export function configureProductPurchaseUnit(
     store.productUnits.push(target);
   } else {
     target.conversion_factor = conversion_factor;
-    target.parent_unit_name = name === base ? null : base;
-    target.quantity_per_parent = conversion_factor;
+    if (name === base || !hasDependentUnits) {
+      target.parent_unit_name = name === base ? null : base;
+      target.quantity_per_parent = conversion_factor;
+    }
   }
   for (const unit of store.productUnits) {
     if (unit.product_id === product_id) unit.is_purchase_default = unit.unit_name === name;
