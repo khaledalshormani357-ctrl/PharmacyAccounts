@@ -318,7 +318,7 @@ export default function ProductDetailScreen() {
             <TextInput
               value={adjustNote}
               onChangeText={setAdjustNote}
-              placeholder="سبب التعديل"
+              placeholder="سبب التعديل (مطلوب)"
               placeholderTextColor={theme.colors.textTertiary}
               style={{ height: 44, borderRadius: 10, borderWidth: 1, borderColor: theme.colors.border, paddingHorizontal: 12, fontSize: 14, textAlign: 'right', color: theme.colors.textPrimary, marginBottom: 16 }}
             />
