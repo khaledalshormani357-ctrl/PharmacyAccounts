@@ -90,7 +90,7 @@ export default function StocktakeScreen() {
           style={{ backgroundColor: theme.colors.background, color: theme.colors.textPrimary, borderColor: theme.colors.border, borderWidth: 1, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 11, textAlign: 'right' }} />
         <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 10 }}>
           <Text style={{ color: theme.colors.textSecondary, fontSize: 12 }}>الدفعات الظاهرة: {rows.length}</Text>
-          <Text style={{ color: deltaRows.length ? theme.colors.danger : theme.colors.success, fontSize: 12, fontWeight: '700' }}>الفروقات: {deltaRows.length}</Text>
+          <Text style={{ color: deltaRows.length ? theme.colors.error : theme.colors.success, fontSize: 12, fontWeight: '700' }}>الفروقات: {deltaRows.length}</Text>
         </View>
       </View>
       <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ padding: 12, paddingBottom: 110 }}>
