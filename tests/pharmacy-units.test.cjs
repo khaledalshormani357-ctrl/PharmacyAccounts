@@ -680,3 +680,73 @@ test('free sample receipt rejects invalid quantity, expiry and missing reason wi
   assert.equal(db.createFreeSampleReceipt({ ...base, reason: ' ' }).success, false);
   assert.equal(db.getProductStock(medicine.id), before);
 });
+
+
+test('stocktake applies multiple batch differences atomically and records explicit stocktake movements', () => {
+  const medicine = product('Atomic stocktake example');
+  configure(medicine.id);
+  buy(medicine.id, 'TAKE-A', '2027-12-31', 10, 'Tablet', 10);
+  buy(medicine.id, 'TAKE-B', '2027-12-31', 10, 'Tablet', 10);
+  const batches = db.getBatches(medicine.id, false);
+  const beforeMovements = db.getStockMovements(medicine.id).length;
+  const result = db.applyStocktake({
+    counts: batches.map((batch, index) => ({ product_id: medicine.id, batch_id: batch.id, actual_quantity: index === 0 ? 8 : 12 })),
+    reason: 'اختبار الجرد الذري',
+  });
+  assert.equal(result.success, true);
+  assert.equal(result.applied, 2);
+  assert.deepEqual(db.getBatches(medicine.id, false).map(b => b.quantity).sort((a, b) => a - b), [8, 12]);
+  const movements = db.getStockMovements(medicine.id).slice(0, 2);
+  assert.equal(movements.length, 2);
+  assert.ok(movements.every(m => m.reference_type === 'stocktake'));
+  assert.equal(db.getStockMovements(medicine.id).length, beforeMovements + 2);
+});
+
+test('stocktake rolls back every batch and audit/movement when a later row fails during commit', () => {
+  const medicine = product('Rollback stocktake example');
+  configure(medicine.id);
+  buy(medicine.id, 'TAKE-ROLL-A', '2027-12-31', 10, 'Tablet', 10);
+  buy(medicine.id, 'TAKE-ROLL-B', '2027-12-31', 10, 'Tablet', 10);
+  const batches = db.getBatches(medicine.id, false);
+  const before = batches.map(b => ({ id: b.id, quantity: b.quantity, status: b.status }));
+  const movementCount = db.getStockMovements(medicine.id).length;
+  const auditCount = db.getAuditLogs({ entity: 'batch' }).length;
+  const originalToISOString = Date.prototype.toISOString;
+  let calls = 0;
+  // eslint-disable-next-line no-extend-native -- scoped fault injection for atomic rollback
+  Date.prototype.toISOString = function () {
+    calls += 1;
+    if (calls === 3) throw new Error('forced stocktake commit failure');
+    return originalToISOString.call(this);
+  };
+  try {
+    assert.throws(() => db.applyStocktake({
+      counts: batches.map(batch => ({ product_id: medicine.id, batch_id: batch.id, actual_quantity: 5 })),
+      reason: 'forced rollback',
+    }), /forced stocktake commit failure/);
+  } finally {
+    // eslint-disable-next-line no-extend-native -- restore built-in after the fault-injection case
+    Date.prototype.toISOString = originalToISOString;
+  }
+  assert.deepEqual(db.getBatches(medicine.id, false).map(b => ({ id: b.id, quantity: b.quantity, status: b.status })), before);
+  assert.equal(db.getStockMovements(medicine.id).length, movementCount);
+  assert.equal(db.getAuditLogs({ entity: 'batch' }).length, auditCount);
+});
+
+test('stocktake validates every count before mutating any batch', () => {
+  const medicine = product('Stocktake validation example');
+  configure(medicine.id);
+  buy(medicine.id, 'TAKE-VALID-A', '2027-12-31', 10, 'Tablet', 10);
+  buy(medicine.id, 'TAKE-VALID-B', '2027-12-31', 10, 'Tablet', 10);
+  const batches = db.getBatches(medicine.id, false);
+  const before = batches.map(b => b.quantity);
+  const result = db.applyStocktake({
+    counts: [
+      { product_id: medicine.id, batch_id: batches[0].id, actual_quantity: 4 },
+      { product_id: medicine.id, batch_id: batches[1].id, actual_quantity: -1 },
+    ],
+    reason: 'validation test',
+  });
+  assert.equal(result.success, false);
+  assert.deepEqual(db.getBatches(medicine.id, false).map(b => b.quantity), before);
+});
