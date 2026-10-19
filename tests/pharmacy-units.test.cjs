@@ -69,6 +69,42 @@ test('financial summary includes both paid and outstanding portions of mixed-pay
   assert.equal(after.grossProfit - before.grossProfit, 50);
 });
 
+test('purchase-unit review updates a safe existing unit and makes it the only purchase default', () => {
+  const medicine = product('Purchase unit editor example');
+  db.replaceProductUnits(medicine.id, [
+    { unit_name: 'Tablet', conversion_factor: 1, parent_unit_name: null, quantity_per_parent: 1,
+      sale_price: null, purchase_price: null, is_purchase_default: true, is_sale_default: true },
+    { unit_name: 'Strip', conversion_factor: 10, parent_unit_name: 'Tablet', quantity_per_parent: 10,
+      sale_price: null, purchase_price: null, is_purchase_default: false, is_sale_default: false },
+  ]);
+
+  const configured = db.configureProductPurchaseUnit(medicine.id, 'Strip', 12, 'Tablet');
+  assert.ok(configured);
+  assert.equal(configured.conversion_factor, 12);
+  assert.equal(configured.parent_unit_name, 'Tablet');
+  assert.equal(configured.quantity_per_parent, 12);
+  assert.equal(db.getProductUnits(medicine.id).filter(unit => unit.is_purchase_default).length, 1);
+  assert.equal(db.getProductUnits(medicine.id).find(unit => unit.unit_name === 'Strip').is_purchase_default, true);
+  assert.equal(db.getProductUnits(medicine.id).find(unit => unit.unit_name === 'Tablet').is_purchase_default, false);
+});
+
+test('purchase-unit review refuses changing a conversion factor used by dependent units', () => {
+  const medicine = product('Dependent purchase unit example');
+  configure(medicine.id, 10, 100);
+  const before = db.getProductUnits(medicine.id).map(unit => ({ ...unit }));
+  assert.equal(db.configureProductPurchaseUnit(medicine.id, 'Strip', 12, 'Tablet'), null);
+  assert.deepEqual(db.getProductUnits(medicine.id), before);
+});
+
+test('purchase-unit review can add a new unit and select it as the purchase default', () => {
+  const medicine = product('New purchase unit example');
+  const configured = db.configureProductPurchaseUnit(medicine.id, 'Carton', 120, 'Tablet');
+  assert.ok(configured);
+  assert.equal(configured.conversion_factor, 120);
+  assert.equal(db.getProductUnits(medicine.id).filter(unit => unit.is_purchase_default).length, 1);
+  assert.equal(db.getProductUnits(medicine.id).find(unit => unit.unit_name === 'Carton').is_purchase_default, true);
+});
+
 test('1 Box = 100 Tablets; 5 Boxes convert to 500 base units and prices derive automatically', () => {
   const result = conversion.deriveUnitFactors('Tablet', [
     { unit_name: 'Strip', parent_unit_name: 'Tablet', quantity_per_parent: 10 },
