@@ -1,6 +1,6 @@
 // Smart Pharmacy ERP — Backup & Restore Screen
 import React, { useState } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, Alert, Share } from 'react-native';
+import { View, Text, TouchableOpacity, ScrollView, Share } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
