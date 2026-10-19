@@ -594,3 +594,51 @@ test('sale cancellation rolls back stock, cash, customer balance, audit and iden
   assert.equal(db.getCustomer(customer.id).balance, balanceBefore - invoice.remaining);
   assert.equal(db.getCashTransactions().length, cashBefore + 1);
 });
+
+test('manual stock adjustment rejects overdrawn or mismatched movements without changing stock', () => {
+  const medicine = product('Safe adjustment validation example');
+  configure(medicine.id);
+  buy(medicine.id, 'SAFE-ADJUST-BATCH', '2027-12-31', 10, 'Tablet', 10);
+  const batch = db.getBatches(medicine.id, false)[0];
+  assert.ok(batch);
+  const beforeQuantity = batch.quantity;
+  const beforeMovements = db.getStockMovements(medicine.id).length;
+
+  const overdrawn = db.adjustStock({
+    product_id: medicine.id, batch_id: batch.id, quantity_change: -11,
+    type: 'ADJUSTMENT_OUT', note: 'attempt to overdraw',
+  });
+  assert.equal(overdrawn.success, false);
+  assert.equal(db.getBatches(medicine.id, false).find(item => item.id === batch.id).quantity, beforeQuantity);
+  assert.equal(db.getStockMovements(medicine.id).length, beforeMovements);
+
+  const wrongDirection = db.adjustStock({
+    product_id: medicine.id, batch_id: batch.id, quantity_change: -1,
+    type: 'ADJUSTMENT_IN', note: 'mismatched movement type',
+  });
+  assert.equal(wrongDirection.success, false);
+  assert.equal(db.getBatches(medicine.id, false).find(item => item.id === batch.id).quantity, beforeQuantity);
+});
+
+test('manual stock adjustment requires a reason and persists a valid quantity change', () => {
+  const medicine = product('Safe adjustment persistence example');
+  configure(medicine.id);
+  buy(medicine.id, 'SAFE-ADJUST-VALID', '2027-12-31', 10, 'Tablet', 10);
+  const batch = db.getBatches(medicine.id, false)[0];
+  assert.ok(batch);
+
+  const missingReason = db.adjustStock({
+    product_id: medicine.id, batch_id: batch.id, quantity_change: -2,
+    type: 'ADJUSTMENT_OUT', note: '   ',
+  });
+  assert.equal(missingReason.success, false);
+  assert.equal(db.getBatches(medicine.id, false).find(item => item.id === batch.id).quantity, 10);
+
+  const adjusted = db.adjustStock({
+    product_id: medicine.id, batch_id: batch.id, quantity_change: -2,
+    type: 'ADJUSTMENT_OUT', note: 'broken packaging',
+  });
+  assert.equal(adjusted.success, true);
+  assert.equal(db.getBatches(medicine.id, false).find(item => item.id === batch.id).quantity, 8);
+  assert.equal(db.getStockMovements(medicine.id).at(0).quantity, -2);
+});
