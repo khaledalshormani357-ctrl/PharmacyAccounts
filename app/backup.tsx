@@ -6,6 +6,7 @@ import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
+import * as Sharing from 'expo-sharing';
 import { useTheme } from '@/contexts/ThemeContext';
 import { createBackup, restoreBackup } from '@/services/database';
 import { useAlert } from '@/template';
@@ -45,13 +46,25 @@ export default function BackupScreen() {
     try {
       const data = createBackup();
       const json = JSON.stringify(data, null, 2);
+      if (!FileSystem.documentDirectory) {
+        showAlert('تعذر إنشاء الملف', 'مساحة ملفات التطبيق غير متاحة على هذا الجهاز.');
+        return;
+      }
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const fileUri = `${FileSystem.documentDirectory}pharmacy-backup-${stamp}.json`;
+      await FileSystem.writeAsStringAsync(fileUri, json, { encoding: FileSystem.EncodingType.UTF8 });
       setBackupJson(json);
       setSelectedBackupName('');
       setLastBackupTime(new Date().toLocaleString('ar-SA'));
-      await Share.share({
-        title: `نسخة احتياطية — ${data.pharmacy_name || data.settings?.pharmacy_name || 'الصيدلية'}`,
-        message: json,
-      });
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(fileUri, {
+          mimeType: 'application/json',
+          dialogTitle: `نسخة احتياطية — ${data.pharmacy_name || data.settings?.pharmacy_name || 'الصيدلية'}`,
+          UTI: 'public.json',
+        });
+      } else {
+        showAlert('تم إنشاء النسخة', `حُفظ ملف النسخة داخل مساحة التطبيق: ${fileUri}`);
+      }
     } catch (e: any) {
       showAlert('خطأ', e?.message || 'فشل إنشاء النسخة الاحتياطية');
     }
