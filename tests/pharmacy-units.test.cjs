@@ -640,5 +640,5 @@ test('manual stock adjustment requires a reason and persists a valid quantity ch
   });
   assert.equal(adjusted.success, true);
   assert.equal(db.getBatches(medicine.id, false).find(item => item.id === batch.id).quantity, 8);
-  assert.equal(db.getStockMovements(medicine.id).at(0).quantity, -2);
+  assert.equal(db.getStockMovements(medicine.id).find(item => item.type === 'ADJUSTMENT_OUT').quantity, -2);
 });
