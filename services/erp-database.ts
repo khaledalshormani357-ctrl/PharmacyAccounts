@@ -2889,6 +2889,65 @@ export function getDashboardKpis(): DashboardKpis {
 // STOCK ADJUSTMENTS
 // ═══════════════════════════════════════════════════════════
 
+export interface StocktakeCountInput {
+  product_id: number;
+  batch_id: number;
+  actual_quantity: number;
+}
+
+/** Apply all stocktake differences as one atomic inventory transaction. */
+export function applyStocktake(data: {
+  counts: StocktakeCountInput[];
+  user_id?: number | null;
+  reason: string;
+}): { success: true; applied: number } | { success: false; error: string } {
+  if (!Array.isArray(data.counts) || data.counts.length === 0) {
+    return { success: false, error: 'لا توجد كميات جرد لاعتمادها' };
+  }
+  if (!data.reason?.trim()) return { success: false, error: 'أدخل سبب الجرد' };
+  const seen = new Set<number>();
+  const rows: { product: Product; batch: Batch; actual: number; diff: number }[] = [];
+  for (const count of data.counts) {
+    if (seen.has(count.batch_id)) return { success: false, error: 'توجد دفعة مكررة في قائمة الجرد' };
+    seen.add(count.batch_id);
+    const product = getProduct(count.product_id);
+    const batch = store.batches.find(entry => entry.id === count.batch_id);
+    if (!product || !batch || batch.product_id !== product.id) {
+      return { success: false, error: 'إحدى دفعات الجرد غير موجودة أو لا تطابق الصنف' };
+    }
+    if (batch.status !== 'ACTIVE') return { success: false, error: 'لا يمكن جرد دفعة غير نشطة أو مسحوبة' };
+    if (!Number.isFinite(count.actual_quantity) || count.actual_quantity < 0) {
+      return { success: false, error: 'توجد كمية فعلية غير صحيحة أو سالبة' };
+    }
+    rows.push({ product, batch, actual: count.actual_quantity, diff: count.actual_quantity - batch.quantity });
+  }
+  const changed = rows.filter(row => Math.abs(row.diff) > 1e-8);
+  if (!changed.length) return { success: true, applied: 0 };
+  return commitReturnAtomically(() => {
+    for (const row of changed) {
+      const beforeQuantity = row.batch.quantity;
+      row.batch.quantity = row.actual;
+      if (row.batch.quantity <= 1e-8) row.batch.status = 'DEPLETED';
+      store.stockMovements.push({
+        id: ids.stockMovements++, product_id: row.product.id, batch_id: row.batch.id,
+        type: row.diff > 0 ? 'ADJUSTMENT_IN' : 'ADJUSTMENT_OUT',
+        quantity: row.diff, unit: row.product.inventory_unit,
+        quantity_in_inventory_unit: row.diff, reference_type: 'stocktake',
+        reference_id: null,
+        note: `${data.reason.trim()}: رصيد النظام ${beforeQuantity}، الرصيد الفعلي ${row.actual}`,
+        user_id: data.user_id ?? null, created_at: now(),
+      });
+      addAuditLog({
+        action: 'STOCKTAKE_APPLY', entity: 'batch', entity_id: row.batch.id,
+        user_id: data.user_id ?? null,
+        before_data: JSON.stringify({ quantity: beforeQuantity, status: 'ACTIVE' }),
+        after_data: JSON.stringify({ quantity: row.batch.quantity, status: row.batch.status, reason: data.reason.trim() }),
+      });
+    }
+    return { success: true as const, applied: changed.length };
+  });
+}
+
 export function adjustStock(data: {
   product_id: number; batch_id: number; quantity_change: number;
   type: TransactionType; note: string; user_id?: number;

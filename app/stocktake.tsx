@@ -5,7 +5,7 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useTheme } from '@/contexts/ThemeContext';
-import { getProducts, getAllBatches, adjustStock, Product, Batch } from '@/services/database';
+import { getProducts, getAllBatches, applyStocktake, Product, Batch } from '@/services/database';
 import { useAlert } from '@/template';
 
 type StocktakeRow = { batch: Batch; product: Product; counted: string };
@@ -49,29 +49,22 @@ export default function StocktakeScreen() {
       { text: 'إلغاء', style: 'cancel' },
       { text: 'اعتماد الجرد', onPress: () => {
         setSaving(true);
-        let completed = 0;
-        for (const row of deltaRows) {
-          const actual = Number(row.counted);
-          const diff = actual - row.batch.quantity;
-          const result = adjustStock({
+        const result = applyStocktake({
+          counts: deltaRows.map(row => ({
             product_id: row.product.id,
             batch_id: row.batch.id,
-            quantity_change: diff,
-            type: diff > 0 ? 'ADJUSTMENT_IN' : 'ADJUSTMENT_OUT',
-            note: 'جرد مخزون: رصيد النظام ' + row.batch.quantity + '، الرصيد الفعلي ' + actual,
-          });
-          if (!result.success) {
-            setSaving(false);
-            showAlert('توقف اعتماد الجرد', 'تم اعتماد ' + completed + ' فرق قبل حدوث خطأ: ' + (result.error || 'خطأ غير معروف') + '. راجع المخزون قبل إعادة المحاولة.');
-            setRefreshKey(v => v + 1);
-            return;
-          }
-          completed += 1;
-        }
+            actual_quantity: Number(row.counted),
+          })),
+          reason: 'جرد مخزون فعلي',
+        });
         setSaving(false);
-        setCounts({});
         setRefreshKey(v => v + 1);
-        showAlert('اكتمل الجرد', 'تم تسجيل ' + completed + ' تسوية مخزون بنجاح.');
+        if (!result.success) {
+          showAlert('تعذر اعتماد الجرد', result.error);
+          return;
+        }
+        setCounts({});
+        showAlert('اكتمل الجرد', result.applied === 0 ? 'لا توجد فروقات لتسجيلها.' : 'تم تسجيل ' + result.applied + ' فرق/فروقات جرد دفعة واحدة.');
       }},
     ]);
   }, [saving, invalidCount, deltaRows, showAlert]);
