@@ -5,7 +5,7 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as DocumentPicker from 'expo-document-picker';
-import * as FileSystem from 'expo-file-system/legacy';
+import * as FileSystem from 'expo-file-system';
 import { useTheme } from '@/contexts/ThemeContext';
 import { createBackup, restoreBackup } from '@/services/database';
 import { useAlert } from '@/template';
