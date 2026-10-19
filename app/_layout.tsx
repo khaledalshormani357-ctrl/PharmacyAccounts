@@ -59,6 +59,7 @@ function AppShell() {
         <Stack.Screen name="product-detail" options={{ headerShown: false }} />
         <Stack.Screen name="inventory" options={{ headerShown: false }} />
         <Stack.Screen name="stocktake" options={{ headerShown: false }} />
+        <Stack.Screen name="free-samples" options={{ headerShown: false }} />
         <Stack.Screen name="drug-catalog" options={{ headerShown: false }} />
         <Stack.Screen name="add-sale" options={{ headerShown: false, presentation: 'modal' }} />
         <Stack.Screen name="add-expense" options={{ headerShown: false, presentation: 'modal' }} />
