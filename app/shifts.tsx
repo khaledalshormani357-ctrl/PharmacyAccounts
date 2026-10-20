@@ -5,6 +5,8 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import * as FileSystem from 'expo-file-system';
+import * as Sharing from 'expo-sharing';
 import { useTheme } from '@/contexts/ThemeContext';
 import { getShifts, getOpenShift, openShift, closeShift, getSetting, Shift } from '@/services/database';
 import { formatCurrency, formatDateTime } from '@/constants/i18n';
@@ -24,6 +26,7 @@ export default function ShiftsScreen() {
   const [openingCash, setOpeningCash] = useState('');
   const [actualCash, setActualCash] = useState('');
   const [closeReason, setCloseReason] = useState('');
+  const [exporting, setExporting] = useState(false);
 
   const load = useCallback(() => {
     setShifts(getShifts(20));
@@ -49,6 +52,37 @@ export default function ShiftsScreen() {
     load();
     showAlert('تم', 'تم إغلاق الوردية');
   };
+  const exportShiftsJson = async () => {
+    if (exporting) return;
+    setExporting(true);
+    try {
+      // Export the same complete set shown in this screen, including shift reconciliation fields.
+      const exportRows = getShifts(20);
+      const payload = {
+        format: 'pharmacy-shifts-export',
+        schema_version: '1.0',
+        exported_at: new Date().toISOString(),
+        record_count: exportRows.length,
+        shifts: exportRows,
+      };
+      if (!FileSystem.documentDirectory) {
+        showAlert('تعذر التصدير', 'مساحة ملفات التطبيق غير متاحة على هذا الجهاز.');
+        return;
+      }
+      const fileUri = `${FileSystem.documentDirectory}pharmacy-shifts-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+      await FileSystem.writeAsStringAsync(fileUri, JSON.stringify(payload, null, 2), { encoding: FileSystem.EncodingType.UTF8 });
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(fileUri, { mimeType: 'application/json', dialogTitle: 'تصدير سجل الورديات', UTI: 'public.json' });
+      } else {
+        showAlert('تم إنشاء الملف', `حُفظ ملف التصدير داخل مساحة التطبيق: ${fileUri}`);
+      }
+    } catch (error: any) {
+      showAlert('فشل التصدير', error?.message || 'تعذر إنشاء ملف الورديات.');
+    } finally {
+      setExporting(false);
+    }
+  };
+
   const buildShiftsPdf = () => buildTableReportHtml({
     pharmacyName: getSetting('pharmacy_name') || 'صيدليتي',
     title: 'تقرير الورديات',
@@ -72,6 +106,9 @@ export default function ShiftsScreen() {
               <MaterialIcons name="arrow-forward" size={20} color="#FFFFFF" />
             </TouchableOpacity>
             <PdfActions buildHtml={buildShiftsPdf} title="تقرير الورديات" onError={(message) => showAlert('خطأ', message)} />
+            <TouchableOpacity accessibilityRole="button" accessibilityLabel="تصدير سجل الورديات JSON" disabled={exporting} onPress={exportShiftsJson} style={{ height: 34, backgroundColor: 'rgba(255,255,255,0.15)', borderRadius: 8, paddingHorizontal: 9, alignItems: 'center', justifyContent: 'center', opacity: exporting ? 0.6 : 1 }}>
+              <Text style={{ color: '#FFFFFF', fontSize: 11, fontWeight: '600' }}>{exporting ? 'جارٍ التصدير…' : 'تصدير JSON'}</Text>
+            </TouchableOpacity>
           </View>
           <Text style={{ fontSize: 17, fontWeight: '700', color: '#FFFFFF' }}>الورديات</Text>
           {openShiftData ? (
