@@ -1,5 +1,5 @@
 // Smart Pharmacy ERP — Receive free supplier samples without financial posting.
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import { ScrollView, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -25,6 +25,7 @@ export default function FreeSamplesScreen() {
   const [expiryDate, setExpiryDate] = useState('');
   const [reason, setReason] = useState('عينة مجانية من المورد');
   const [saving, setSaving] = useState(false);
+  const saveInProgress = useRef(false);
   const fields = [
     { label: 'رقم التشغيلة', value: batchNumber, set: setBatchNumber, placeholder: 'مثال: BATCH-001' },
     { label: 'تاريخ الانتهاء (YYYY-MM-DD)', value: expiryDate, set: setExpiryDate, placeholder: '2027-12-31' },
@@ -34,16 +35,25 @@ export default function FreeSamplesScreen() {
   ];
   const inputStyle = { color: theme.colors.textPrimary, backgroundColor: theme.colors.background, borderColor: theme.colors.divider, borderWidth: 1, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10, textAlign: 'right' as const };
   const save = () => {
+    // A ref blocks rapid repeated taps before React has rendered the disabled state.
+    if (saveInProgress.current) return;
     if (!product || !unit) { showAlert('تنبيه', 'اختر الصنف ووحدة الكمية أولاً'); return; }
+    saveInProgress.current = true;
     setSaving(true);
-    const result = createFreeSampleReceipt({
-      product_id: product.id, unit, quantity: Number(quantity), unit_cost: Number(unitCost),
-      batch_number: batchNumber, expiry_date: expiryDate, supplier_id: supplierId, reason,
-    });
-    setSaving(false);
-    if (!result.success) { showAlert('تعذر حفظ العينة', result.error); return; }
-    showAlert('تم استلام العينة', `تمت إضافة ${result.base_quantity} ${product.inventory_unit} إلى المخزون دون إنشاء مبيعات أو رصيد مستحق للمورد.`);
-    router.back();
+    try {
+      const result = createFreeSampleReceipt({
+        product_id: product.id, unit, quantity: Number(quantity), unit_cost: Number(unitCost),
+        batch_number: batchNumber, expiry_date: expiryDate, supplier_id: supplierId, reason,
+      });
+      if (!result.success) { showAlert('تعذر حفظ العينة', result.error); return; }
+      showAlert('تم استلام العينة', `تمت إضافة ${result.base_quantity} ${product.inventory_unit} إلى المخزون دون إنشاء مبيعات أو رصيد مستحق للمورد.`);
+      router.back();
+    } catch {
+      showAlert('تعذر حفظ العينة', 'حدث خطأ غير متوقع أثناء حفظ العينة. تحقق من المخزون ثم حاول مرة أخرى.');
+    } finally {
+      saveInProgress.current = false;
+      setSaving(false);
+    }
   };
   return (
     <View style={{ flex: 1, backgroundColor: theme.colors.background, paddingTop: insets.top }}>
