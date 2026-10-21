@@ -3171,7 +3171,8 @@ export async function restoreBackup(data: BackupData): Promise<{ success: boolea
     // Rebuild every entity counter from the restored data so the next create
     // operation cannot reuse an ID that already exists in the imported backup.
     const nextId = (rows: Array<{ id: number }>, current: number) =>
-      Math.max(current, 1, ...rows.map(row => Number.isSafeInteger(row.id) && row.id >= 0 ? row.id + 1 : 1));
+      rows.reduce((next, row) =>
+        Number.isSafeInteger(row.id) && row.id >= 0 ? Math.max(next, row.id + 1) : next, Math.max(current, 1));
     ids.products = nextId(store.products, ids.products);
     ids.productUnits = nextId(store.productUnits, ids.productUnits);
     ids.batches = nextId(store.batches, ids.batches);
