@@ -3197,6 +3197,14 @@ export async function restoreBackup(data: BackupData): Promise<{ success: boolea
     ids.auditLogs = nextId(store.auditLogs, ids.auditLogs);
     ids.users = Math.max(ids.users, 1);
 
+    // Invoice numbers share one monotonic counter across sales and purchases.
+    // Advance it from restored invoice numbers as well as its existing value.
+    const restoredInvoiceCounter = [...store.sales, ...store.purchases].reduce((next, row) => {
+      const match = /^INV-(\\d+)$/.exec(row.invoice_number || '');
+      return match ? Math.max(next, Number(match[1]) || 0) : next;
+    }, invoiceCounter);
+    invoiceCounter = restoredInvoiceCounter;
+
     addAuditLog({ action: 'RESTORE', entity: 'backup', entity_id: null,
       after_data: JSON.stringify({ from: data.created_at }) });
     // Do not report a successful restore until the resulting snapshot is durable.
