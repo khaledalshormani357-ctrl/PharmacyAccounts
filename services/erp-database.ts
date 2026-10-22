@@ -2550,7 +2550,7 @@ export function getExpenseCategories(): string[] {
 }
 
 export function addExpenseCategory(name: string): { ok: boolean; message?: string } {
-  const normalized = name.trim().replace(/\\s+/g, ' ');
+  const normalized = name.trim().replace(/\s+/g, ' ');
   if (!normalized) return { ok: false, message: 'اكتب اسم الحساب أولاً' };
   if (normalized.length > 50) return { ok: false, message: 'اسم الحساب طويل جداً (الحد 50 حرفاً)' };
   if (getExpenseCategories().some(category => category.localeCompare(normalized, 'ar', { sensitivity: 'base' }) === 0)) {
