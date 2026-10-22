@@ -2530,10 +2530,48 @@ export function deleteExpense(id: number): void {
   addAuditLog({ action: 'EXPENSE_DELETE', entity: 'expense', entity_id: id });
 }
 
+const DEFAULT_EXPENSE_CATEGORIES = ['إيجار', 'رواتب', 'مرافق', 'صيانة', 'مستلزمات', 'مواصلات', 'تسويق', 'أخرى'];
+const EXPENSE_CATEGORIES_SETTING = 'expense_categories';
+
+function readCustomExpenseCategories(): string[] {
+  try {
+    const parsed: unknown = JSON.parse(store.settings[EXPENSE_CATEGORIES_SETTING] || '[]');
+    return Array.isArray(parsed)
+      ? parsed.filter((value): value is string => typeof value === 'string').map(value => value.trim()).filter(Boolean)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
 export function getExpenseCategories(): string[] {
-  const defaultCats = ['إيجار', 'رواتب', 'مرافق', 'صيانة', 'مستلزمات', 'مواصلات', 'تسويق', 'أخرى'];
-  const existing = new Set(store.expenses.map(e => e.category));
-  return [...new Set([...defaultCats, ...existing])];
+  const historical = store.expenses.map(e => e.category);
+  return [...new Set([...DEFAULT_EXPENSE_CATEGORIES, ...readCustomExpenseCategories(), ...historical])];
+}
+
+export function addExpenseCategory(name: string): { ok: boolean; message?: string } {
+  const normalized = name.trim().replace(/\\s+/g, ' ');
+  if (!normalized) return { ok: false, message: 'اكتب اسم الحساب أولاً' };
+  if (normalized.length > 50) return { ok: false, message: 'اسم الحساب طويل جداً (الحد 50 حرفاً)' };
+  if (getExpenseCategories().some(category => category.localeCompare(normalized, 'ar', { sensitivity: 'base' }) === 0)) {
+    return { ok: false, message: 'هذا الحساب موجود بالفعل' };
+  }
+  store.settings[EXPENSE_CATEGORIES_SETTING] = JSON.stringify([...readCustomExpenseCategories(), normalized]);
+  persistStore();
+  return { ok: true };
+}
+
+export function removeExpenseCategory(name: string): { ok: boolean; message?: string } {
+  if (DEFAULT_EXPENSE_CATEGORIES.includes(name)) {
+    return { ok: false, message: 'لا يمكن حذف الحساب الافتراضي' };
+  }
+  if (store.expenses.some(expense => expense.category === name)) {
+    return { ok: false, message: 'لا يمكن حذف حساب مرتبط بمصروفات سابقة' };
+  }
+  const custom = readCustomExpenseCategories().filter(category => category !== name);
+  store.settings[EXPENSE_CATEGORIES_SETTING] = JSON.stringify(custom);
+  persistStore();
+  return { ok: true };
 }
 
 export function getExpensesByCategory(dateFrom: string, dateTo: string): { category: string; total: number }[] {
