@@ -93,6 +93,7 @@ export default function MoreScreen() {
           <MenuItem icon="manage-accounts" label="المستخدمون" color="#0052CC" onPress={() => router.push('/settings')} />
           <MenuItem icon="history" label="سجل التدقيق" color="#5E6C84" onPress={() => router.push('/audit-log')} />
           <MenuItem icon="backup" label="النسخ الاحتياطي" color="#00875A" onPress={() => router.push('/backup')} />
+          <MenuItem icon="sync" label="حالة المزامنة" sublabel="تشخيص قائمة النقل المحلية" color="#0052CC" onPress={() => router.push('/sync-status' as any)} />
           <MenuItem icon="settings" label="الإعدادات" onPress={() => router.push('/settings')} />
         </Section>
       </ScrollView>
