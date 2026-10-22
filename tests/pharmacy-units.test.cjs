@@ -750,3 +750,23 @@ test('stocktake validates every count before mutating any batch', () => {
   assert.equal(result.success, false);
   assert.deepEqual(db.getBatches(medicine.id, false).map(b => b.quantity), before);
 });
+
+
+test('expense account directory persists custom categories and rejects duplicates', () => {
+  const category = 'رسوم حكومية اختبار';
+  assert.equal(db.getExpenseCategories().includes(category), false);
+  assert.deepEqual(db.addExpenseCategory('  ' + category + '  '), { ok: true });
+  assert.equal(db.getExpenseCategories().includes(category), true);
+  assert.equal(db.addExpenseCategory(category).ok, false);
+  assert.equal(db.getExpenseCategories().filter(value => value === category).length, 1);
+});
+
+test('expense account directory protects default and historically used categories', () => {
+  assert.equal(db.removeExpenseCategory('إيجار').ok, false);
+  const category = 'حساب مرتبط اختبار';
+  assert.equal(db.addExpenseCategory(category).ok, true);
+  db.addExpense({ category, amount: 10, date: '2026-10-23', note: 'test', cashbox_id: 'daily' });
+  const result = db.removeExpenseCategory(category);
+  assert.equal(result.ok, false);
+  assert.equal(db.getExpenseCategories().includes(category), true);
+});
