@@ -19,6 +19,7 @@ export default function StocktakeScreen() {
   const [counts, setCounts] = useState<Record<number, string>>({});
   const [refreshKey, setRefreshKey] = useState(0);
   const [saving, setSaving] = useState(false);
+  const [adjustmentReason, setAdjustmentReason] = useState('جرد مخزون فعلي');
 
   const rows = useMemo<StocktakeRow[]>(() => {
     const products = getProducts({ search: search.trim() });
@@ -41,6 +42,10 @@ export default function StocktakeScreen() {
       showAlert('تحقق من الجرد', 'أدخل كمية فعلية صحيحة وغير سالبة لكل دفعة ظاهرة قبل اعتماد الجرد.');
       return;
     }
+    if (!adjustmentReason.trim()) {
+      showAlert('سبب التسوية مطلوب', 'اكتب سببًا واضحًا قبل اعتماد فروقات الجرد.');
+      return;
+    }
     if (!deltaRows.length) {
       showAlert('لا توجد فروقات', 'الكميات الفعلية تطابق أرصدة النظام.');
       return;
@@ -55,7 +60,7 @@ export default function StocktakeScreen() {
             batch_id: row.batch.id,
             actual_quantity: Number(row.counted),
           })),
-          reason: 'جرد مخزون فعلي',
+          reason: adjustmentReason.trim(),
         });
         setSaving(false);
         setRefreshKey(v => v + 1);
@@ -85,6 +90,9 @@ export default function StocktakeScreen() {
           <Text style={{ color: theme.colors.textSecondary, fontSize: 12 }}>الدفعات الظاهرة: {rows.length}</Text>
           <Text style={{ color: deltaRows.length ? theme.colors.error : theme.colors.success, fontSize: 12, fontWeight: '700' }}>الفروقات: {deltaRows.length}</Text>
         </View>
+        <Text style={{ color: theme.colors.textSecondary, fontSize: 12, textAlign: 'right', marginTop: 12, marginBottom: 5 }}>سبب التسوية (يُحفظ في سجل الحركة)</Text>
+        <TextInput value={adjustmentReason} onChangeText={setAdjustmentReason} placeholder="مثال: جرد نهاية الشهر" placeholderTextColor={theme.colors.textTertiary}
+          style={{ backgroundColor: theme.colors.background, color: theme.colors.textPrimary, borderColor: theme.colors.border, borderWidth: 1, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 9, textAlign: 'right' }} />
       </View>
       <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ padding: 12, paddingBottom: 110 }}>
         {rows.map(({ batch, product, counted }) => {
