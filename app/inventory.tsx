@@ -153,7 +153,7 @@ export default function InventoryScreen() {
             >
               <Text style={{ fontSize: 12, fontWeight: '500', color: filter === f.key ? '#FFFFFF' : theme.colors.textSecondary }}>{f.label}</Text>
               <Text style={{ fontSize: 11, color: filter === f.key ? 'rgba(255,255,255,0.8)' : theme.colors.textTertiary }}>
-                ({items.filter(i => f.key === 'all' || i.status === f.key).length})
+                ({allItems.filter(i => f.key === 'all' || i.status === f.key).length})
               </Text>
             </TouchableOpacity>
           ))}
