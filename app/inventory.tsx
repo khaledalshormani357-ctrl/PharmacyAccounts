@@ -52,14 +52,20 @@ export default function InventoryScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const [items, setItems] = useState<InventoryItem[]>([]);
+  const [allItems, setAllItems] = useState<InventoryItem[]>([]);
   const [filter, setFilter] = useState('all');
   const [search, setSearch] = useState('');
 
   const load = useCallback(() => {
     try {
+      setAllItems(getInventoryList());
       setItems(getInventoryList({ search: search || undefined, status: filter === 'all' ? undefined : filter }));
     } catch {}
   }, [filter, search]);
+
+  const inventoryValue = allItems.reduce((sum, item) => sum + Math.max(0, item.total_quantity) * Math.max(0, item.selling_price), 0);
+  const lowStockCount = allItems.filter(item => item.status === 'low' || item.status === 'out').length;
+  const expiringCount = allItems.filter(item => item.status === 'expiring' || item.status === 'expired').length;
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
   const buildInventoryPdf = () => {
@@ -106,6 +112,24 @@ export default function InventoryScreen() {
           />
         </View>
       </View>
+
+      {/* Reference design: live inventory KPIs; sourced from the complete inventory, not filtered search results. */}
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 12, paddingVertical: 10, gap: 8, flexDirection: 'row' }} style={{ flexGrow: 0, backgroundColor: theme.colors.background }}>
+        {[
+          { label: 'إجمالي الأصناف', value: String(allItems.length), icon: 'inventory-2', color: '#00B8D9' },
+          { label: 'قيمة المخزون', value: formatCurrency(inventoryValue), icon: 'payments', color: '#168A62' },
+          { label: 'قريب/منتهي', value: String(expiringCount), icon: 'schedule', color: '#D97706' },
+          { label: 'النواقص', value: String(lowStockCount), icon: 'warning', color: '#D64545' },
+        ].map(metric => (
+          <View key={metric.label} style={{ minWidth: 132, backgroundColor: theme.colors.surface, borderColor: theme.colors.border, borderWidth: 1, borderRadius: 12, padding: 12, gap: 8 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+              <MaterialIcons name={metric.icon as any} size={18} color={metric.color} />
+              <Text style={{ color: theme.colors.textSecondary, fontSize: 11, textAlign: 'right' }}>{metric.label}</Text>
+            </View>
+            <Text numberOfLines={1} style={{ color: theme.colors.text, fontSize: 17, fontWeight: '700', textAlign: 'right' }}>{metric.value}</Text>
+          </View>
+        ))}
+      </ScrollView>
 
       {/* Filter chips */}
       <View style={{ backgroundColor: theme.colors.surface, borderBottomWidth: 1, borderBottomColor: theme.colors.border }}>
