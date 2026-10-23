@@ -131,6 +131,17 @@ export default function InventoryScreen() {
         ))}
       </ScrollView>
 
+      <View style={{ flexDirection: 'row', gap: 8, paddingHorizontal: 12, paddingBottom: 10, backgroundColor: theme.colors.background }}>
+        <TouchableOpacity onPress={() => router.push('/add-purchase')} style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 10, borderRadius: 10, backgroundColor: theme.colors.surface, borderWidth: 1, borderColor: theme.colors.border }}>
+          <MaterialIcons name="receipt-long" size={18} color={theme.colors.primary} />
+          <Text style={{ color: theme.colors.text, fontSize: 12, fontWeight: '600' }}>فاتورة شراء</Text>
+        </TouchableOpacity>
+        <TouchableOpacity onPress={() => router.push('/stocktake')} style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 10, borderRadius: 10, backgroundColor: theme.colors.surface, borderWidth: 1, borderColor: theme.colors.border }}>
+          <MaterialIcons name="fact-check" size={18} color={theme.colors.primary} />
+          <Text style={{ color: theme.colors.text, fontSize: 12, fontWeight: '600' }}>الجرد والتسويات</Text>
+        </TouchableOpacity>
+      </View>
+
       {/* Filter chips */}
       <View style={{ backgroundColor: theme.colors.surface, borderBottomWidth: 1, borderBottomColor: theme.colors.border }}>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 12, paddingVertical: 8, gap: 8, flexDirection: 'row' }}>
