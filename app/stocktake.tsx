@@ -72,7 +72,7 @@ export default function StocktakeScreen() {
         showAlert('اكتمل الجرد', result.applied === 0 ? 'لا توجد فروقات لتسجيلها.' : 'تم تسجيل ' + result.applied + ' فرق/فروقات جرد دفعة واحدة.');
       }},
     ]);
-  }, [saving, invalidCount, deltaRows, showAlert]);
+  }, [saving, invalidCount, deltaRows, adjustmentReason, showAlert]);
 
   return (
     <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
