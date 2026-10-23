@@ -3140,6 +3140,8 @@ export async function restoreBackup(data: BackupData): Promise<{ success: boolea
   }
 
   const previousStore = JSON.parse(JSON.stringify(store)) as typeof store;
+  const previousIds = { ...ids };
+  const previousInvoiceCounter = invoiceCounter;
   try {
     // A backup may restore business settings, but cannot replace this device's PIN state.
     const safeSettings = { ...(data.settings || {}) };
@@ -3165,6 +3167,44 @@ export async function restoreBackup(data: BackupData): Promise<{ success: boolea
     store.customerTransactions = data.customerTransactions || [];
     store.supplierTransactions = data.supplierTransactions || [];
     store.auditLogs = data.auditLogs || [];
+
+    // Rebuild every entity counter from the restored data so the next create
+    // operation cannot reuse an ID that already exists in the imported backup.
+    const nextId = (rows: Array<{ id: number }>, current: number) =>
+      rows.reduce((next, row) =>
+        Number.isSafeInteger(row.id) && row.id >= 0 ? Math.max(next, row.id + 1) : next, Math.max(current, 1));
+    ids.products = nextId(store.products, ids.products);
+    ids.productUnits = nextId(store.productUnits, ids.productUnits);
+    ids.batches = nextId(store.batches, ids.batches);
+    ids.stockMovements = nextId(store.stockMovements, ids.stockMovements);
+    ids.sales = nextId(store.sales, ids.sales);
+    ids.saleItems = nextId(store.saleItems, ids.saleItems);
+    ids.saleAllocations = nextId(store.saleBatchAllocations, ids.saleAllocations);
+    ids.salePayments = Math.max(ids.salePayments, 1);
+    ids.saleReturns = nextId(store.saleReturns, ids.saleReturns);
+    ids.saleReturnItems = nextId(store.saleReturns.flatMap(row => row.items || []), ids.saleReturnItems);
+    ids.purchases = nextId(store.purchases, ids.purchases);
+    ids.purchaseItems = nextId(store.purchaseItems, ids.purchaseItems);
+    ids.purchaseReturns = nextId(store.purchaseReturns, ids.purchaseReturns);
+    ids.purchaseReturnItems = nextId(store.purchaseReturns.flatMap(row => row.items || []), ids.purchaseReturnItems);
+    ids.customers = nextId(store.customers, ids.customers);
+    ids.customerTx = nextId(store.customerTransactions, ids.customerTx);
+    ids.suppliers = nextId(store.suppliers, ids.suppliers);
+    ids.supplierTx = nextId(store.supplierTransactions, ids.supplierTx);
+    ids.cashTx = nextId(store.cashTransactions, ids.cashTx);
+    ids.shifts = nextId(store.shifts, ids.shifts);
+    ids.expenses = nextId(store.expenses, ids.expenses);
+    ids.auditLogs = nextId(store.auditLogs, ids.auditLogs);
+    ids.users = Math.max(ids.users, 1);
+
+    // Invoice numbers share one monotonic counter across sales and purchases.
+    // Advance it from restored invoice numbers as well as its existing value.
+    const restoredInvoiceCounter = [...store.sales, ...store.purchases].reduce((next, row) => {
+      const match = /^INV-(\d+)$/.exec(row.invoice_number || '');
+      return match ? Math.max(next, Number(match[1]) || 0) : next;
+    }, invoiceCounter);
+    invoiceCounter = restoredInvoiceCounter;
+
     addAuditLog({ action: 'RESTORE', entity: 'backup', entity_id: null,
       after_data: JSON.stringify({ from: data.created_at }) });
     // Do not report a successful restore until the resulting snapshot is durable.
@@ -3174,6 +3214,8 @@ export async function restoreBackup(data: BackupData): Promise<{ success: boolea
     Object.keys(previousStore).forEach(key => {
       (store as any)[key] = (previousStore as any)[key];
     });
+    Object.assign(ids, previousIds);
+    invoiceCounter = previousInvoiceCounter;
     return { success: false, error: e?.message || 'فشلت الاستعادة' };
   }
 }
