@@ -1,5 +1,5 @@
 import React from 'react';
-import { ScrollView, Text, TouchableOpacity, View } from 'react-native';
+import { Alert, ScrollView, Text, TouchableOpacity, View } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -88,7 +88,7 @@ export default function ReturnDetailScreen() {
           {[
             ['طريقة التسوية', settlement],
             ['المستخدم', record.user_name || 'غير مسجل'],
-            ['الحالة', record.status === 'POSTED' ? 'معتمد — سجل ثابت' : 'مسجل'],
+            ['الحالة', record.status === 'CANCELLED' ? 'ملغى — تم عكس الأثر' : record.status === 'POSTED' ? 'معتمد' : 'مسجل'],
             ...(kind === 'sale' ? [['حالة البضاعة', (record as SaleReturn).condition === 'DAMAGED' ? 'تالف / محجور خارج الرصيد المتاح' : 'صالح لإعادة البيع']] : []),
           ].map(([label, value], index) => <View key={index} style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 6, borderBottomWidth: index < 3 ? 1 : 0, borderBottomColor: theme.colors.divider }}><Text style={{ color: theme.colors.textPrimary, fontSize: 12 }}>{value}</Text><Text style={{ color: theme.colors.textSecondary, fontSize: 12 }}>{label}</Text></View>)}
         </View>
@@ -108,8 +108,23 @@ export default function ReturnDetailScreen() {
           })}
           <View style={{ padding: 13, flexDirection: 'row', justifyContent: 'space-between', backgroundColor: theme.colors.surfaceAlt }}><Text style={{ color: accent, fontWeight: '900', fontSize: 16 }}>{formatCurrency(record.total)}</Text><Text style={{ color: theme.colors.textPrimary, fontWeight: '900' }}>إجمالي المرتجع</Text></View>
         </View>
+        {record.status !== 'CANCELLED' ? <TouchableOpacity
+          onPress={() => Alert.alert('إلغاء المرتجع', 'سيتم عكس الأثر المخزني والمالي لهذا المرتجع وتسجيل الإلغاء في سجل التدقيق. هل تريد المتابعة؟', [
+            { text: 'تراجع', style: 'cancel' },
+            { text: 'تأكيد الإلغاء', style: 'destructive', onPress: async () => {
+              const result = kind === 'sale'
+                ? cancelSaleReturn(record.id, 'إلغاء من شاشة تفاصيل المرتجع')
+                : cancelPurchaseReturn(record.id, 'إلغاء من شاشة تفاصيل المرتجع');
+              if (!result.success) { showAlert('تعذر الإلغاء', result.error); return; }
+              try { await flushDatabaseWrites(); showAlert('تم الإلغاء', 'تم تسجيل الإلغاء وعكس الأثر المخزني والمالي.'); router.back(); }
+              catch { showAlert('تحقق من السجل', 'تعذر تأكيد الحفظ النهائي؛ افحص سجل المرتجعات قبل إعادة المحاولة.'); }
+            } },
+          ])}
+          style={{ marginTop: 14, minHeight: 46, borderRadius: 10, borderWidth: 1, borderColor: theme.colors.error, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.surface }}>
+          <Text style={{ color: theme.colors.error, fontWeight: '800' }}>إلغاء المرتجع وعكس أثره</Text>
+        </TouchableOpacity> : <View style={{ marginTop: 14, padding: 12, borderRadius: 10, backgroundColor: theme.colors.surfaceAlt }}><Text style={{ textAlign: 'center', color: theme.colors.error, fontWeight: '800' }}>هذا المرتجع ملغى — {record.notes || 'تم عكس أثره المالي والمخزني'}</Text></View>}
         {record.notes ? <View style={{ marginTop: 12, padding: 12, borderRadius: 10, backgroundColor: theme.colors.surfaceAlt }}><Text style={{ color: theme.colors.textSecondary, textAlign: 'right', fontSize: 11 }}>ملاحظات</Text><Text style={{ color: theme.colors.textPrimary, textAlign: 'right', marginTop: 4 }}>{record.notes}</Text></View> : null}
-        <Text style={{ color: theme.colors.textTertiary, textAlign: 'center', fontSize: 10, marginTop: 14 }}>هذا مستند مستقل؛ الفاتورة الأصلية باقية دون تعديل. لا يمكن حذف المرتجع المعتمد.</Text>
+        <Text style={{ color: theme.colors.textTertiary, textAlign: 'center', fontSize: 10, marginTop: 14 }}>هذا مستند مستقل؛ الفاتورة الأصلية باقية دون تعديل. لا يُحذف المستند؛ الإلغاء يسجل كحركة عكسية قابلة للتدقيق.</Text>
       </ScrollView>
     </View>
   );
