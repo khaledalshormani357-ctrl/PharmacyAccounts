@@ -30,9 +30,11 @@ export default function AddSupplierScreen() {
 
   const handleSave = () => {
     if (!name.trim()) { showAlert('تنبيه', 'أدخل اسم المورد'); return; }
+    const opening = Number(openingBalance);
+    if (!Number.isFinite(opening) || opening < 0) { showAlert('تنبيه', 'أدخل رصيداً افتتاحياً صحيحاً وغير سالب'); return; }
     try {
       if (editingId && Number.isFinite(editingId)) updateSupplier(editingId, { name: name.trim(), phone: phone.trim() || null, address: address.trim() || null, notes: notes.trim() || null });
-      else addSupplier({ name: name.trim(), phone: phone.trim() || undefined, address: address.trim() || undefined, opening_balance: Number(openingBalance) || 0, notes: notes.trim() || undefined });
+      else addSupplier({ name: name.trim(), phone: phone.trim() || undefined, address: address.trim() || undefined, opening_balance: opening, notes: notes.trim() || undefined });
       router.back();
     } catch (error) { showAlert('تعذر الحفظ', error instanceof Error ? error.message : 'حدث خطأ غير متوقع'); }
   };
