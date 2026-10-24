@@ -102,7 +102,7 @@ export default function AddPurchaseScreen() {
         }
         setItems(mapped);
         if (draft.invoice_number) setInvoiceNo(String(draft.invoice_number));
-        if (draft.date && /^\\d{4}-\\d{2}-\\d{2}$/.test(String(draft.date))) setDate(String(draft.date));
+        if (draft.date && /^\d{4}-\d{2}-\d{2}$/.test(String(draft.date))) setDate(String(draft.date));
         if (Number.isFinite(Number(draft.invoice_discount))) setInvoiceDiscount(String(Math.max(0, Number(draft.invoice_discount))));
         if (Number.isFinite(Number(draft.amount_paid))) setAmountPaid(String(Math.max(0, Number(draft.amount_paid))));
         if (draft.supplier_name) {
