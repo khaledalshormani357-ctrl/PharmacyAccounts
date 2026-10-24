@@ -277,8 +277,9 @@ export interface SaleReturn {
   user_name?: string | null;
   settlement_method?: ReturnSettlementMethod;
   condition?: ReturnCondition;
+  is_direct?: boolean;
   notes?: string | null;
-  status?: 'POSTED';
+  status?: 'POSTED' | 'CANCELLED';
   idempotency_key?: string | null;
   total: number;
   cash_refund: number;
@@ -314,8 +315,9 @@ export interface PurchaseReturn {
   user_id?: number | null;
   user_name?: string | null;
   settlement_method?: ReturnSettlementMethod;
+  is_direct?: boolean;
   notes?: string | null;
-  status?: 'POSTED';
+  status?: 'POSTED' | 'CANCELLED';
   idempotency_key?: string | null;
   total: number;
   cash_refund: number;
@@ -1760,7 +1762,7 @@ export function getSaleItems(sale_id: number): SaleItem[] {
 
 export function getSaleItemReturnedQuantity(sale_item_id: number): number {
   return store.saleReturns.flatMap(entry => entry.items)
-    .filter(line => line.sale_item_id === sale_item_id)
+    .filter(line => line.sale_item_id === sale_item_id && store.saleReturns.some(entry => entry.id === line.return_id && entry.status !== 'CANCELLED'))
     .reduce((sum, line) => sum + line.quantity, 0);
 }
 
@@ -1821,6 +1823,128 @@ export interface NewSaleReturn {
 
 export type ReturnResult<T> = { success: true; record: T } | { success: false; error: string };
 
+/** Direct sales return: no source invoice is fabricated. Quantities are entered in the product's base inventory unit. */
+export interface NewDirectSaleReturn {
+  items: { product_id: number; batch_id: number; quantity: number; unit_price: number }[];
+  customer_id?: number | null;
+  user_id?: number | null;
+  settlement_method?: Extract<ReturnSettlementMethod, 'CASH_REFUND' | 'CUSTOMER_BALANCE' | 'CUSTOMER_CREDIT'>;
+  condition?: ReturnCondition;
+  notes?: string;
+  idempotency_key?: string;
+}
+export function createDirectSaleReturn(data: NewDirectSaleReturn): ReturnResult<SaleReturn> {
+  if (data.idempotency_key) { const old = store.saleReturns.find(x => x.idempotency_key === data.idempotency_key); if (old) return { success: true, record: old }; }
+  if (!data.items?.length) return { success: false, error: 'أضف صنفًا واحدًا على الأقل' };
+  const condition = data.condition ?? 'SELLABLE';
+  const method = data.settlement_method ?? 'CASH_REFUND';
+  const customer = data.customer_id ? store.customers.find(x => x.id === data.customer_id) : null;
+  if (data.customer_id && !customer) return { success: false, error: 'العميل المحدد غير موجود' };
+  if (method !== 'CASH_REFUND' && !customer) return { success: false, error: 'تسوية حساب العميل تتطلب اختيار عميل' };
+  const seen = new Set<string>();
+  const prepared: { product: Product; batch: Batch; quantity: number; price: number; amount: number; cogs: number }[] = [];
+  for (const row of data.items) {
+    const key = row.product_id + ':' + row.batch_id;
+    if (seen.has(key)) return { success: false, error: 'لا تكرر الدفعة نفسها؛ اجمع الكمية في سطر واحد' };
+    seen.add(key);
+    const product = getProduct(row.product_id);
+    const batch = getBatch(row.batch_id);
+    if (!product || !batch || batch.product_id !== product.id) return { success: false, error: 'الصنف أو الدفعة غير موجودة' };
+    if (!Number.isFinite(row.quantity) || row.quantity <= 0 || !Number.isFinite(row.unit_price) || row.unit_price < 0) return { success: false, error: 'الكمية أو سعر الرد غير صحيح' };
+    if (condition === 'SELLABLE' && batch.status === 'RECALLED') return { success: false, error: 'لا يمكن إعادة دفعة مسحوبة من التداول إلى المخزون المتاح' };
+    const amount = row.quantity * row.unit_price;
+    prepared.push({ product, batch, quantity: row.quantity, price: row.unit_price, amount, cogs: condition === 'SELLABLE' ? row.quantity * batch.purchase_price : 0 });
+  }
+  const total = prepared.reduce((s, x) => s + x.amount, 0);
+  try { return commitReturnAtomically(() => {
+    const id = ids.saleReturns++, number = nextSaleReturnNumber(id);
+    const items: SaleReturnItem[] = prepared.map(x => ({ id: ids.saleReturnItems++, return_id: id, sale_item_id: 0, product_id: x.product.id,
+      product_name: x.product.trade_name, unit: x.product.inventory_unit, quantity: x.quantity, conversion_factor: 1,
+      quantity_in_inventory_unit: x.quantity, refund_amount: x.amount, returned_cogs: x.cogs,
+      batch_allocations: [{ batch_id: x.batch.id, quantity: x.quantity }], unit_price: x.price, condition }));
+    const user = data.user_id ? store.users.find(x => x.id === data.user_id) : null;
+    const record: SaleReturn = { id, sale_id: 0, return_number: number, invoice_number: 'مباشر', customer_id: customer?.id ?? null,
+      user_id: data.user_id ?? null, user_name: user?.full_name ?? null, settlement_method: method, condition, is_direct: true,
+      notes: data.notes?.trim() || null, status: 'POSTED', idempotency_key: data.idempotency_key ?? null,
+      total, cash_refund: method === 'CASH_REFUND' ? total : 0, credit_reduction: method === 'CASH_REFUND' ? 0 : total,
+      date: today(), created_at: now(), items };
+    for (const x of prepared) {
+      if (condition === 'DAMAGED') x.batch.quarantined_quantity = (x.batch.quarantined_quantity ?? 0) + x.quantity;
+      else x.batch.quantity += x.quantity;
+      if (x.batch.status !== 'RECALLED') x.batch.status = x.batch.quantity <= 1e-8 ? 'DEPLETED' : (x.batch.expiry_date && x.batch.expiry_date <= today() ? 'EXPIRED' : 'ACTIVE');
+      store.stockMovements.push({ id: ids.stockMovements++, product_id: x.product.id, batch_id: x.batch.id,
+        type: condition === 'DAMAGED' ? 'DAMAGE' : 'SALE_RETURN', quantity: x.quantity, unit: x.product.inventory_unit,
+        quantity_in_inventory_unit: x.quantity, reference_type: 'sale_return', reference_id: id,
+        note: 'مرتجع مبيعات مباشر', user_id: data.user_id ?? null, created_at: now() });
+    }
+    store.saleReturns.push(record);
+    if (customer && record.credit_reduction > 0) { customer.balance -= total; store.customerTransactions.push({ id: ids.customerTx++, customer_id: customer.id,
+      type: 'return', amount: -total, balance_after: customer.balance, reference_id: id, note: 'مرتجع مبيعات مباشر ' + number, date: today(), created_at: now() }); }
+    if (record.cash_refund > 0) { const shift = getOpenShift(); store.cashTransactions.push({ id: ids.cashTx++, type: 'CUSTOMER_REFUND',
+      amount: -total, reference_type: 'sale_return', reference_id: id, shift_id: shift?.id ?? null, note: 'رد نقدي لمرتجع مباشر ' + number,
+      user_id: data.user_id ?? null, date: today(), created_at: now() }); if (shift) shift.expected_cash = (shift.expected_cash ?? shift.opening_cash) - total; }
+    addAuditLog({ action: 'SALE_RETURN_CREATE_DIRECT', entity: 'sale_return', entity_id: id, user_id: data.user_id, after_data: JSON.stringify({ number, total, method, condition, items }) });
+    return { success: true, record };
+  }); } catch (e: any) { return { success: false, error: e?.message || 'تعذر ترحيل المرتجع المباشر' }; }
+}
+
+/** Direct purchase return without inventing a purchase invoice. Quantity is in base inventory units. */
+export interface NewDirectPurchaseReturn {
+  items: { product_id: number; batch_id: number; quantity: number; unit_price: number }[];
+  supplier_id?: number | null;
+  user_id?: number | null;
+  settlement_method?: Extract<ReturnSettlementMethod, 'CASH_REFUND' | 'SUPPLIER_BALANCE'>;
+  notes?: string;
+  idempotency_key?: string;
+}
+export function createDirectPurchaseReturn(data: NewDirectPurchaseReturn): ReturnResult<PurchaseReturn> {
+  if (data.idempotency_key) { const old = store.purchaseReturns.find(x => x.idempotency_key === data.idempotency_key); if (old) return { success: true, record: old }; }
+  if (!data.items?.length) return { success: false, error: 'أضف صنفًا واحدًا على الأقل' };
+  const method = data.settlement_method ?? 'SUPPLIER_BALANCE';
+  const supplier = data.supplier_id ? store.suppliers.find(x => x.id === data.supplier_id) : null;
+  if (method === 'SUPPLIER_BALANCE' && !supplier) return { success: false, error: 'اختر المورد لتخفيض مديونيته' };
+  const seen = new Set<string>();
+  const prepared: { product: Product; batch: Batch; quantity: number; price: number; amount: number }[] = [];
+  for (const row of data.items) {
+    const key = row.product_id + ':' + row.batch_id;
+    if (seen.has(key)) return { success: false, error: 'لا تكرر الدفعة نفسها؛ اجمع الكمية في سطر واحد' };
+    seen.add(key);
+    const product = getProduct(row.product_id), batch = getBatch(row.batch_id);
+    if (!product || !batch || batch.product_id !== product.id) return { success: false, error: 'الصنف أو الدفعة غير موجودة' };
+    if (supplier && batch.supplier_id != null && batch.supplier_id !== supplier.id) return { success: false, error: 'الدفعة لا تتبع المورد المحدد' };
+    if (!Number.isFinite(row.quantity) || row.quantity <= 0 || row.quantity > batch.quantity || !Number.isFinite(row.unit_price) || row.unit_price < 0) return { success: false, error: 'الكمية تتجاوز رصيد الدفعة أو السعر غير صحيح' };
+    prepared.push({ product, batch, quantity: row.quantity, price: row.unit_price, amount: row.quantity * row.unit_price });
+  }
+  const total = prepared.reduce((s, x) => s + x.amount, 0);
+  try { return commitReturnAtomically(() => {
+    const id = ids.purchaseReturns++, number = nextPurchaseReturnNumber(id);
+    const items: PurchaseReturnItem[] = prepared.map(x => ({ id: ids.purchaseReturnItems++, return_id: id, purchase_item_id: 0,
+      product_id: x.product.id, product_name: x.product.trade_name, unit: x.product.inventory_unit, quantity: x.quantity,
+      conversion_factor: 1, quantity_in_inventory_unit: x.quantity, refund_amount: x.amount, batch_id: x.batch.id, unit_price: x.price }));
+    const user = data.user_id ? store.users.find(x => x.id === data.user_id) : null;
+    const record: PurchaseReturn = { id, purchase_id: 0, return_number: number, invoice_number: 'مباشر', supplier_id: supplier?.id ?? null,
+      user_id: data.user_id ?? null, user_name: user?.full_name ?? null, settlement_method: method, is_direct: true,
+      notes: data.notes?.trim() || null, status: 'POSTED', idempotency_key: data.idempotency_key ?? null,
+      total, cash_refund: method === 'CASH_REFUND' ? total : 0, payable_reduction: method === 'SUPPLIER_BALANCE' ? total : 0,
+      date: today(), created_at: now(), items };
+    for (const x of prepared) {
+      x.batch.quantity -= x.quantity;
+      if (x.batch.quantity <= 1e-8 && x.batch.status !== 'RECALLED') x.batch.status = 'DEPLETED';
+      store.stockMovements.push({ id: ids.stockMovements++, product_id: x.product.id, batch_id: x.batch.id, type: 'PURCHASE_RETURN',
+        quantity: -x.quantity, unit: x.product.inventory_unit, quantity_in_inventory_unit: -x.quantity, reference_type: 'purchase_return',
+        reference_id: id, note: 'مرتجع مشتريات مباشر إلى المورد', user_id: data.user_id ?? null, created_at: now() });
+    }
+    store.purchaseReturns.push(record);
+    if (supplier && record.payable_reduction > 0) { supplier.balance -= total; store.supplierTransactions.push({ id: ids.supplierTx++, supplier_id: supplier.id,
+      type: 'return', amount: -total, balance_after: supplier.balance, reference_id: id, note: 'مرتجع مشتريات مباشر ' + number, date: today(), created_at: now() }); }
+    if (record.cash_refund > 0) { const shift = getOpenShift(); store.cashTransactions.push({ id: ids.cashTx++, type: 'PURCHASE_RETURN',
+      amount: total, reference_type: 'purchase_return', reference_id: id, shift_id: shift?.id ?? null, note: 'استرداد نقدي لمرتجع مباشر ' + number,
+      user_id: data.user_id ?? null, date: today(), created_at: now() }); if (shift) shift.expected_cash = (shift.expected_cash ?? shift.opening_cash) + total; }
+    addAuditLog({ action: 'PURCHASE_RETURN_CREATE_DIRECT', entity: 'purchase_return', entity_id: id, user_id: data.user_id, after_data: JSON.stringify({ number, total, method, items }) });
+    return { success: true, record };
+  }); } catch (e: any) { return { success: false, error: e?.message || 'تعذر ترحيل المرتجع المباشر' }; }
+}
+
 export function createSaleReturn(data: NewSaleReturn): ReturnResult<SaleReturn> {
   if (data.idempotency_key) {
     const duplicate = store.saleReturns.find(entry => entry.idempotency_key === data.idempotency_key);
@@ -1858,7 +1982,7 @@ export function createSaleReturn(data: NewSaleReturn): ReturnResult<SaleReturn> 
     const allocations: ReturnBatchAllocation[] = [];
     for (const source of sourceAllocations) {
       const alreadyReturned = store.saleReturns.flatMap(entry => entry.items)
-        .filter(line => line.sale_item_id === item.id)
+        .filter(line => line.sale_item_id === item.id && store.saleReturns.some(entry => entry.id === line.return_id && entry.status !== 'CANCELLED'))
         .flatMap(line => line.batch_allocations)
         .filter(allocation => allocation.batch_id === source.batch_id)
         .reduce((sum, allocation) => sum + allocation.quantity, 0);
@@ -2155,10 +2279,55 @@ export function createPurchase(data: NewPurchase): PurchaseResult {
   }
 }
 
+/** Safely cancel a purchase invoice, reversing stock and accounting only when its lot quantities remain available. */
+export function cancelPurchaseInvoice(id: number, reason: string, user_id?: number | null): { success: boolean; error?: string } {
+  const purchase = store.purchases.find(p => p.id === id);
+  if (!purchase) return { success: false, error: 'فاتورة المشتريات غير موجودة' };
+  if (purchase.cancelled) return { success: false, error: 'الفاتورة ملغاة بالفعل' };
+  if (!reason.trim()) return { success: false, error: 'سبب الإلغاء مطلوب' };
+  const items = store.purchaseItems.filter(item => item.purchase_id === id);
+  if (!items.length) return { success: false, error: 'لا توجد بنود مرتبطة بالفاتورة' };
+  const activeReturns = store.purchaseReturns.filter(ret => ret.purchase_id === id && ret.status !== 'CANCELLED');
+  if (activeReturns.length) return { success: false, error: 'لا يمكن إلغاء الفاتورة لوجود مرتجعات مشتريات مرحّلة؛ ألغِ المرتجعات أولًا' };
+  for (const item of items) {
+    const batch = item.batch_id ? getBatch(item.batch_id) : null;
+    if (!batch) return { success: false, error: `دفعة الصنف ${item.product_name} غير موجودة؛ أوقف الإلغاء للمراجعة اليدوية` };
+    if (batch.quantity + 1e-8 < item.quantity_in_inventory_unit) return { success: false, error: `لا يمكن إلغاء الفاتورة بأمان: رصيد دفعة ${item.product_name} أقل من كمية الفاتورة، ربما استُهلك جزء منها` };
+  }
+  try {
+    return commitReturnAtomically(() => {
+      for (const item of items) {
+        const batch = getBatch(item.batch_id!);
+        if (!batch) throw new Error('دفعة غير موجودة أثناء الإلغاء');
+        batch.quantity = Math.max(0, batch.quantity - item.quantity_in_inventory_unit);
+        if (batch.quantity <= 1e-8 && batch.status !== 'RECALLED') batch.status = 'DEPLETED';
+        store.stockMovements.push({ id: ids.stockMovements++, product_id: item.product_id, batch_id: batch.id, type: 'ADJUSTMENT_OUT',
+          quantity: -item.quantity_in_inventory_unit, unit: item.unit, quantity_in_inventory_unit: -item.quantity_in_inventory_unit,
+          reference_type: 'purchase_cancel', reference_id: id, note: 'إلغاء فاتورة شراء: ' + reason.trim(), user_id: user_id ?? null, created_at: now() });
+      }
+      if (purchase.supplier_id && purchase.remaining > 0) {
+        const supplier = store.suppliers.find(s => s.id === purchase.supplier_id);
+        if (supplier) {
+          supplier.balance = Math.max(0, supplier.balance - purchase.remaining);
+          store.supplierTransactions.push({ id: ids.supplierTx++, supplier_id: supplier.id, type: 'adjustment',
+            amount: -purchase.remaining, balance_after: supplier.balance, reference_id: id, note: 'إلغاء فاتورة شراء ' + purchase.invoice_number + ': ' + reason.trim(), date: today(), created_at: now() });
+        }
+      }
+      if (purchase.amount_paid > 0) store.cashTransactions.push({ id: ids.cashTx++, type: 'ADJUSTMENT', amount: purchase.amount_paid,
+        reference_type: 'purchase_cancel', reference_id: id, shift_id: null, cashbox_id: 'daily',
+        note: 'عكس دفعة فاتورة ملغاة ' + purchase.invoice_number + ': ' + reason.trim(), user_id: user_id ?? null, date: today(), created_at: now() });
+      purchase.cancelled = true; purchase.cancelled_by = user_id ?? null; purchase.cancelled_at = now(); purchase.cancel_reason = reason.trim();
+      addAuditLog({ action: 'PURCHASE_CANCEL', entity: 'purchase', entity_id: id, user_id: user_id ?? undefined,
+        after_data: JSON.stringify({ reason: reason.trim(), total: purchase.total, amount_paid: purchase.amount_paid }) });
+      return { success: true };
+    });
+  } catch (e: any) { return { success: false, error: e?.message || 'تعذر إلغاء فاتورة المشتريات' }; }
+}
+
 export function getPurchases(opts?: {
-  dateFrom?: string; dateTo?: string; supplier_id?: number; limit?: number;
+  dateFrom?: string; dateTo?: string; supplier_id?: number; limit?: number; includeCancelled?: boolean;
 }): Purchase[] {
-  let result = store.purchases.filter(p => !p.cancelled);
+  let result = store.purchases.filter(p => opts?.includeCancelled || !p.cancelled);
   if (opts?.dateFrom) result = result.filter(p => p.date >= opts.dateFrom!);
   if (opts?.dateTo) result = result.filter(p => p.date <= opts.dateTo!);
   if (opts?.supplier_id) result = result.filter(p => p.supplier_id === opts.supplier_id);
@@ -2185,7 +2354,7 @@ export function getPurchaseItemReturnableQuantity(purchase_item_id: number): num
 
 export function getPurchaseItemReturnedQuantity(purchase_item_id: number): number {
   return store.purchaseReturns.flatMap(entry => entry.items)
-    .filter(line => line.purchase_item_id === purchase_item_id)
+    .filter(line => line.purchase_item_id === purchase_item_id && store.purchaseReturns.some(entry => entry.id === line.return_id && entry.status !== 'CANCELLED'))
     .reduce((sum, line) => sum + line.quantity, 0);
 }
 
@@ -2199,6 +2368,88 @@ export function getAllPurchaseReturns(): PurchaseReturn[] {
 
 export function getPurchaseReturn(id: number): PurchaseReturn | null {
   return store.purchaseReturns.find(entry => entry.id === id) ?? null;
+}
+
+/** Cancel a posted sales return by reversing its exact inventory and settlement effects. */
+export function cancelSaleReturn(id: number, reason: string, user_id?: number | null): ReturnResult<SaleReturn> {
+  const record = store.saleReturns.find(entry => entry.id === id);
+  if (!record) return { success: false, error: 'مرتجع المبيعات غير موجود' };
+  if (record.status === 'CANCELLED') return { success: false, error: 'تم إلغاء هذا المرتجع سابقًا' };
+  if (!reason.trim()) return { success: false, error: 'أدخل سبب إلغاء المرتجع' };
+  try {
+    return commitReturnAtomically(() => {
+      for (const line of record.items) {
+        for (const allocation of line.batch_allocations ?? []) {
+          const batch = store.batches.find(entry => entry.id === allocation.batch_id);
+          if (!batch) throw new Error('دفعة المرتجع غير موجودة؛ أُلغي الإجراء دون تغيير');
+          if (record.condition === 'DAMAGED') batch.quarantined_quantity = Math.max(0, (batch.quarantined_quantity ?? 0) - allocation.quantity);
+          else {
+            if (batch.quantity + 1e-8 < allocation.quantity) throw new Error('لا يمكن عكس المرتجع: الكمية المسترجعة صُرفت لاحقًا من الدفعة');
+            batch.quantity -= allocation.quantity;
+          }
+          if (batch.status !== 'RECALLED') batch.status = batch.quantity <= 1e-8 ? 'DEPLETED' : (batch.expiry_date && batch.expiry_date <= today() ? 'EXPIRED' : 'ACTIVE');
+          store.stockMovements.push({ id: ids.stockMovements++, product_id: line.product_id, batch_id: batch.id,
+            type: 'ADJUSTMENT_OUT', quantity: -allocation.quantity, unit: getProduct(line.product_id)?.inventory_unit ?? 'قطعة',
+            quantity_in_inventory_unit: -allocation.quantity, reference_type: 'sale_return_cancel', reference_id: id,
+            note: 'عكس مرتجع مبيعات: ' + reason.trim(), user_id: user_id ?? null, created_at: now() });
+        }
+      }
+      const customer = record.customer_id ? store.customers.find(entry => entry.id === record.customer_id) : null;
+      if (customer && record.credit_reduction > 0) {
+        customer.balance += record.credit_reduction;
+        store.customerTransactions.push({ id: ids.customerTx++, customer_id: customer.id, type: 'adjustment',
+          amount: record.credit_reduction, balance_after: customer.balance, reference_id: id,
+          note: 'عكس مرتجع مبيعات ' + (record.return_number ?? id) + ': ' + reason.trim(), date: today(), created_at: now() });
+      }
+      if (record.cash_refund > 0) {
+        store.cashTransactions.push({ id: ids.cashTx++, type: 'ADJUSTMENT', amount: record.cash_refund,
+          reference_type: 'sale_return_cancel', reference_id: id, shift_id: null,
+          note: 'عكس رد نقدي لمرتجع ' + (record.return_number ?? id) + ': ' + reason.trim(), user_id: user_id ?? null, date: today(), created_at: now() });
+      }
+      record.status = 'CANCELLED';
+      addAuditLog({ action: 'SALE_RETURN_CANCEL', entity: 'sale_return', entity_id: id, user_id: user_id ?? undefined,
+        after_data: JSON.stringify({ reason: reason.trim(), return_number: record.return_number }) });
+      return { success: true, record };
+    });
+  } catch (error: any) { return { success: false, error: error?.message || 'تعذر إلغاء المرتجع؛ تم التراجع عن التغييرات' }; }
+}
+
+/** Cancel a posted purchase return and restore the original batch, supplier balance or cash. */
+export function cancelPurchaseReturn(id: number, reason: string, user_id?: number | null): ReturnResult<PurchaseReturn> {
+  const record = store.purchaseReturns.find(entry => entry.id === id);
+  if (!record) return { success: false, error: 'مرتجع المشتريات غير موجود' };
+  if (record.status === 'CANCELLED') return { success: false, error: 'تم إلغاء هذا المرتجع سابقًا' };
+  if (!reason.trim()) return { success: false, error: 'أدخل سبب إلغاء المرتجع' };
+  try {
+    return commitReturnAtomically(() => {
+      for (const line of record.items) {
+        const batch = store.batches.find(entry => entry.id === line.batch_id);
+        if (!batch) throw new Error('دفعة المرتجع غير موجودة؛ أُلغي الإجراء دون تغيير');
+        batch.quantity += line.quantity_in_inventory_unit;
+        if (batch.status !== 'RECALLED') batch.status = batch.expiry_date && batch.expiry_date <= today() ? 'EXPIRED' : 'ACTIVE';
+        store.stockMovements.push({ id: ids.stockMovements++, product_id: line.product_id, batch_id: batch.id,
+          type: 'ADJUSTMENT_IN', quantity: line.quantity_in_inventory_unit, unit: getProduct(line.product_id)?.inventory_unit ?? 'قطعة',
+          quantity_in_inventory_unit: line.quantity_in_inventory_unit, reference_type: 'purchase_return_cancel', reference_id: id,
+          note: 'عكس مرتجع مشتريات: ' + reason.trim(), user_id: user_id ?? null, created_at: now() });
+      }
+      const supplier = record.supplier_id ? store.suppliers.find(entry => entry.id === record.supplier_id) : null;
+      if (supplier && record.payable_reduction > 0) {
+        supplier.balance += record.payable_reduction;
+        store.supplierTransactions.push({ id: ids.supplierTx++, supplier_id: supplier.id, type: 'adjustment',
+          amount: record.payable_reduction, balance_after: supplier.balance, reference_id: id,
+          note: 'عكس مرتجع مشتريات ' + (record.return_number ?? id) + ': ' + reason.trim(), date: today(), created_at: now() });
+      }
+      if (record.cash_refund > 0) {
+        store.cashTransactions.push({ id: ids.cashTx++, type: 'ADJUSTMENT', amount: -record.cash_refund,
+          reference_type: 'purchase_return_cancel', reference_id: id, shift_id: null,
+          note: 'عكس استرداد نقدي لمرتجع ' + (record.return_number ?? id) + ': ' + reason.trim(), user_id: user_id ?? null, date: today(), created_at: now() });
+      }
+      record.status = 'CANCELLED';
+      addAuditLog({ action: 'PURCHASE_RETURN_CANCEL', entity: 'purchase_return', entity_id: id, user_id: user_id ?? undefined,
+        after_data: JSON.stringify({ reason: reason.trim(), return_number: record.return_number }) });
+      return { success: true, record };
+    });
+  } catch (error: any) { return { success: false, error: error?.message || 'تعذر إلغاء المرتجع؛ تم التراجع عن التغييرات' }; }
 }
 
 export interface NewPurchaseReturn {
@@ -2813,8 +3064,8 @@ export function getOpenShift(): Shift | null {
 export function getReportSummary(dateFrom: string, dateTo: string): ReportSummary {
   const sales = getSales({ dateFrom, dateTo });
   const expenses = getExpenses({ dateFrom, dateTo });
-  const saleReturns = store.saleReturns.filter(entry => entry.date >= dateFrom && entry.date <= dateTo);
-  const purchaseReturns = store.purchaseReturns.filter(entry => entry.date >= dateFrom && entry.date <= dateTo);
+  const saleReturns = store.saleReturns.filter(entry => entry.status !== 'CANCELLED' && entry.date >= dateFrom && entry.date <= dateTo);
+  const purchaseReturns = store.purchaseReturns.filter(entry => entry.status !== 'CANCELLED' && entry.date >= dateFrom && entry.date <= dateTo);
 
   // Mixed invoices must contribute their actually paid portion to cash sales and
   // their outstanding portion to credit sales; excluding them understated revenue.
