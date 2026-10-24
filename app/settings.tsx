@@ -20,6 +20,8 @@ export default function SettingsScreen() {
   const [ownerName, setOwnerName] = useState('');
   const [pharmacyPhone, setPharmacyPhone] = useState('');
   const [pharmacyAddress, setPharmacyAddress] = useState('');
+  const [receiptHeader, setReceiptHeader] = useState('');
+  const [receiptFooter, setReceiptFooter] = useState('');
   const [pharmacyLogoUri, setPharmacyLogoUri] = useState<string | null>(null);
   const [currency, setCurrency] = useState('ريال يمني');
   const [currencySymbol, setCurrencySymbol] = useState('ر.ي');
@@ -35,6 +37,8 @@ export default function SettingsScreen() {
     setOwnerName(getSetting('owner_name') || '');
     setPharmacyPhone(getSetting('pharmacy_phone') || '');
     setPharmacyAddress(getSetting('pharmacy_address') || '');
+    setReceiptHeader(getSetting('receipt_header') || '');
+    setReceiptFooter(getSetting('receipt_footer') || '');
     setPharmacyLogoUri(getSetting('pharmacy_logo_uri') || null);
     setCurrency(getSetting('currency') || 'ريال يمني');
     setCurrencySymbol(getSetting('currency_symbol') || 'ر.ي');
@@ -47,6 +51,8 @@ export default function SettingsScreen() {
     setSetting('owner_name', ownerName.trim());
     setSetting('pharmacy_phone', pharmacyPhone.trim());
     setSetting('pharmacy_address', pharmacyAddress.trim());
+    setSetting('receipt_header', receiptHeader.trim());
+    setSetting('receipt_footer', receiptFooter.trim());
     setSetting('pharmacy_logo_uri', pharmacyLogoUri || '');
     setSetting('currency', currency.trim());
     setSetting('currency_symbol', currencySymbol.trim());
@@ -148,6 +154,15 @@ export default function SettingsScreen() {
               <TextInput style={inputStyle} value={currency} onChangeText={setCurrency} placeholder="ريال يمني" placeholderTextColor={theme.colors.textTertiary} />
             </View>
           </View>
+        </View>
+
+        <Text style={{ fontSize: 13, fontWeight: '700', color: theme.colors.textPrimary, textAlign: 'right', marginBottom: 12, borderRightWidth: 3, borderRightColor: theme.colors.primary, paddingRight: 8 }}>النص الدعائي للفواتير والتقارير</Text>
+        <View style={{ backgroundColor: theme.colors.surface, borderRadius: 12, borderWidth: 1, borderColor: theme.colors.border, padding: 14, marginBottom: 14 }}>
+          <Text style={labelStyle}>نص أعلى المستند (اختياري)</Text>
+          <TextInput style={[inputStyle, { minHeight: 64, height: 64, marginBottom: 12, paddingTop: 10 }]} multiline value={receiptHeader} onChangeText={setReceiptHeader} placeholder="عبارة أو معلومات تظهر أعلى الفاتورة" placeholderTextColor={theme.colors.textTertiary} />
+          <Text style={labelStyle}>نص أسفل المستند (اختياري)</Text>
+          <TextInput style={[inputStyle, { minHeight: 76, height: 76, paddingTop: 10 }]} multiline value={receiptFooter} onChangeText={setReceiptFooter} placeholder="عبارة دعائية، أرقام التواصل أو تعليمات للعميل" placeholderTextColor={theme.colors.textTertiary} />
+          <Text style={{ color: theme.colors.textTertiary, fontSize: 11, textAlign: 'right', marginTop: 7 }}>تُحفظ هذه النصوص ضمن إعدادات الجهاز. ظهورها يعتمد على قالب المستند المستخدم.</Text>
         </View>
 
         <Text style={{ fontSize: 13, fontWeight: '700', color: theme.colors.textPrimary, textAlign: 'right', marginBottom: 12, borderRightWidth: 3, borderRightColor: theme.colors.primary, paddingRight: 8 }}>الرصيد الافتتاحي</Text>
