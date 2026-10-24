@@ -19,6 +19,7 @@ export default function StocktakeScreen() {
   const [counts, setCounts] = useState<Record<number, string>>({});
   const [refreshKey, setRefreshKey] = useState(0);
   const [saving, setSaving] = useState(false);
+  const [adjustmentReason, setAdjustmentReason] = useState('');
 
   const rows = useMemo<StocktakeRow[]>(() => {
     const products = getProducts({ search: search.trim() });
@@ -45,7 +46,11 @@ export default function StocktakeScreen() {
       showAlert('لا توجد فروقات', 'الكميات الفعلية تطابق أرصدة النظام.');
       return;
     }
-    showAlert('تأكيد اعتماد الجرد', 'سيتم تسجيل ' + deltaRows.length + ' فرق/فروقات كحركات تسوية مع سبب موحد. لا يمكن التراجع عنها تلقائياً.', [
+    if (!adjustmentReason.trim()) {
+      showAlert('سبب التسوية مطلوب', 'اكتب سبب فرق الجرد قبل اعتماد أي تعديل على المخزون.');
+      return;
+    }
+    showAlert('تأكيد اعتماد الجرد', 'سيتم تسجيل ' + deltaRows.length + ' فرق/فروقات كحركات تسوية بسبب: ' + adjustmentReason.trim() + '. لا يمكن التراجع عنها تلقائياً.', [
       { text: 'إلغاء', style: 'cancel' },
       { text: 'اعتماد الجرد', onPress: () => {
         setSaving(true);
@@ -55,7 +60,7 @@ export default function StocktakeScreen() {
             batch_id: row.batch.id,
             actual_quantity: Number(row.counted),
           })),
-          reason: 'جرد مخزون فعلي',
+          reason: adjustmentReason.trim(),
         });
         setSaving(false);
         setRefreshKey(v => v + 1);
@@ -67,7 +72,7 @@ export default function StocktakeScreen() {
         showAlert('اكتمل الجرد', result.applied === 0 ? 'لا توجد فروقات لتسجيلها.' : 'تم تسجيل ' + result.applied + ' فرق/فروقات جرد دفعة واحدة.');
       }},
     ]);
-  }, [saving, invalidCount, deltaRows, showAlert]);
+  }, [saving, invalidCount, deltaRows, adjustmentReason, showAlert]);
 
   return (
     <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
@@ -81,6 +86,8 @@ export default function StocktakeScreen() {
       <View style={{ padding: 12, backgroundColor: theme.colors.surface, borderBottomWidth: 1, borderBottomColor: theme.colors.border }}>
         <TextInput value={search} onChangeText={setSearch} placeholder="ابحث باسم الدواء أو الباركود..." placeholderTextColor={theme.colors.textTertiary}
           style={{ backgroundColor: theme.colors.background, color: theme.colors.textPrimary, borderColor: theme.colors.border, borderWidth: 1, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 11, textAlign: 'right' }} />
+        <TextInput value={adjustmentReason} onChangeText={setAdjustmentReason} placeholder="سبب التسوية (إلزامي: تالف، كسر، فرق جرد...)" placeholderTextColor={theme.colors.textTertiary}
+          style={{ marginTop: 10, backgroundColor: theme.colors.background, color: theme.colors.textPrimary, borderColor: theme.colors.border, borderWidth: 1, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 11, textAlign: 'right' }} />
         <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 10 }}>
           <Text style={{ color: theme.colors.textSecondary, fontSize: 12 }}>الدفعات الظاهرة: {rows.length}</Text>
           <Text style={{ color: deltaRows.length ? theme.colors.error : theme.colors.success, fontSize: 12, fontWeight: '700' }}>الفروقات: {deltaRows.length}</Text>
