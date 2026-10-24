@@ -1,5 +1,5 @@
 // Smart Pharmacy ERP — Opening stock without financial posting.
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import { ScrollView, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -22,6 +22,7 @@ export default function OpeningStockScreen() {
   const [batchNumber, setBatchNumber] = useState('');
   const [expiryDate, setExpiryDate] = useState('');
   const [saving, setSaving] = useState(false);
+  const saveInProgress = useRef(false);
 
   const inputStyle = {
     color: theme.colors.textPrimary, backgroundColor: theme.colors.background,
@@ -32,7 +33,8 @@ export default function OpeningStockScreen() {
     [p.trade_name, p.generic_name || '', p.barcode || ''].some(v => v.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase()))).slice(0, 10);
 
   const save = () => {
-    if (saving) return;
+    // Prevent duplicate opening batches from rapid taps before React rerenders.
+    if (saveInProgress.current) return;
     if (!product || !unit) {
       showAlert('الصنف والوحدة مطلوبان', 'اختر الدواء ووحدة الرصيد الافتتاحي أولاً.');
       return;
@@ -47,6 +49,7 @@ export default function OpeningStockScreen() {
       showAlert('تكلفة غير صحيحة', 'أدخل تكلفة وحدة تساوي صفرًا أو أكثر.');
       return;
     }
+    saveInProgress.current = true;
     setSaving(true);
     try {
       const result = createOpeningStock({
@@ -63,6 +66,7 @@ export default function OpeningStockScreen() {
     } catch {
       showAlert('تعذر الحفظ', 'حدث خطأ أثناء حفظ الرصيد الافتتاحي. تحقق من المخزون قبل إعادة المحاولة.');
     } finally {
+      saveInProgress.current = false;
       setSaving(false);
     }
   };
