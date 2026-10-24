@@ -16,7 +16,8 @@ export type TransactionType =
   | 'TRANSFER_IN' | 'TRANSFER_OUT';
 
 export type SaleType = 'cash' | 'credit' | 'mixed';
-export type UserRole = 'ADMIN' | 'PHARMACIST' | 'CASHIER' | 'STOREKEEPER' | 'ACCOUNTANT';
+export type UserRole = 'ADMIN' | 'MANAGER' | 'PHARMACIST' | 'CASHIER' | 'STOREKEEPER' | 'ACCOUNTANT';
+export type EmployeePermissionMap = Record<string, boolean>;
 export type MovementClass = 'FAST' | 'NORMAL' | 'SLOW' | 'DEAD';
 export type AbcClass = 'A' | 'B' | 'C';
 export type ShiftStatus = 'OPEN' | 'CLOSED';
@@ -48,6 +49,9 @@ export interface User {
   full_name: string;
   role: UserRole;
   phone: string | null;
+  /** Per-operation overrides saved locally; omitted legacy values use role defaults. */
+  permissions?: EmployeePermissionMap;
+  job_title?: string | null;
   active: boolean;
   last_login: string | null;
   created_at: string;
@@ -748,32 +752,34 @@ export function getUsers(): User[] {
 
 export function addUser(data: {
   username: string; password: string; full_name: string; role: UserRole; phone?: string;
+  job_title?: string | null; permissions?: EmployeePermissionMap;
 }): User {
   const user: User = {
-    id: ids.users++,
-    username: data.username,
-    password_hash: simpleHash(data.password),
-    full_name: data.full_name,
-    role: data.role,
-    phone: data.phone ?? null,
-    active: true,
-    last_login: null,
-    created_at: now(),
+    id: ids.users++, username: data.username, password_hash: simpleHash(data.password),
+    full_name: data.full_name, role: data.role, phone: data.phone ?? null,
+    job_title: data.job_title ?? null,
+    ...(data.permissions ? { permissions: { ...data.permissions } } : {}),
+    active: true, last_login: null, created_at: now(),
   };
   store.users.push(user);
+  addAuditLog({ action: 'USER_CREATE', entity: 'user', entity_id: user.id,
+    after_data: JSON.stringify({ username: user.username, role: user.role, job_title: user.job_title }) });
   persistStore();
   return user;
 }
 
-export function updateUser(id: number, data: Partial<Pick<User, 'full_name' | 'role' | 'phone' | 'active'> & { password: string }>): void {
+export function updateUser(id: number, data: Partial<Pick<User, 'full_name' | 'role' | 'phone' | 'active' | 'permissions' | 'job_title'> & { password: string }>): void {
   const user = store.users.find(u => u.id === id);
   if (!user) return;
   if (data.full_name !== undefined) user.full_name = data.full_name;
   if (data.role !== undefined) user.role = data.role;
   if (data.phone !== undefined) user.phone = data.phone;
   if (data.active !== undefined) user.active = data.active;
+  if (data.job_title !== undefined) user.job_title = data.job_title;
+  if (data.permissions !== undefined) user.permissions = { ...data.permissions };
   if (data.password) user.password_hash = simpleHash(data.password);
-  addAuditLog({ action: 'USER_UPDATE', entity: 'user', entity_id: id, after_data: JSON.stringify({ username: user.username, active: user.active, role: user.role }) });
+  addAuditLog({ action: 'USER_UPDATE', entity: 'user', entity_id: id,
+    after_data: JSON.stringify({ username: user.username, active: user.active, role: user.role, job_title: user.job_title, permissions: user.permissions }) });
   persistStore();
 }
 
