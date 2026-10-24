@@ -81,10 +81,10 @@ export default function ReturnDetailScreen() {
       </View>
 
       <ScrollView contentContainerStyle={{ padding: 14, paddingBottom: 32 }}>
-        <TouchableOpacity onPress={() => router.push({ pathname: kind === 'sale' ? '/sale-detail' : '/purchase-detail', params: { id: String(kind === 'sale' ? (record as SaleReturn).sale_id : (record as PurchaseReturn).purchase_id) } } as any)} style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 12, borderRadius: 10, backgroundColor: theme.colors.surface, borderWidth: 1, borderColor: theme.colors.border, marginBottom: 12 }}>
+        {!record.is_direct &&         <TouchableOpacity onPress={() => router.push({ pathname: kind === 'sale' ? '/sale-detail' : '/purchase-detail', params: { id: String(kind === 'sale' ? (record as SaleReturn).sale_id : (record as PurchaseReturn).purchase_id) } } as any)} style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 12, borderRadius: 10, backgroundColor: theme.colors.surface, borderWidth: 1, borderColor: theme.colors.border, marginBottom: 12 }}>
           <MaterialIcons name="open-in-new" size={18} color={theme.colors.primary} />
           <Text style={{ color: theme.colors.primary, fontWeight: '700' }}>عرض الفاتورة الأصلية — {original?.invoice_number || record.invoice_number}</Text>
-        </TouchableOpacity>
+        </TouchableOpacity>}
 
         <View style={{ padding: 14, borderRadius: 11, backgroundColor: theme.colors.surface, borderWidth: 1, borderColor: theme.colors.border, marginBottom: 12 }}>
           <Text style={{ textAlign: 'right', fontWeight: '800', color: theme.colors.textPrimary, marginBottom: 9 }}>بيانات المعاملة</Text>
