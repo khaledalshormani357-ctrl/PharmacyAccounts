@@ -207,7 +207,7 @@ export default function LocalTransferScreen() {
       for (let index = 0; index < totalChunks; index += 1) {
         channel.send(JSON.stringify({ type: 'chunk', index, data: json.slice(index * CHUNK_SIZE, (index + 1) * CHUNK_SIZE) }));
         setProgress(Math.round((index + 1) / totalChunks * 100));
-        if (channel.bufferedAmount > 256 * 1024) {
+        while (channel.bufferedAmount > 128 * 1024) {
           await new Promise(resolve => setTimeout(resolve, 30));
         }
       }
