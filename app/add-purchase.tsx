@@ -1,12 +1,13 @@
 // Smart Pharmacy ERP — Add Purchase (Invoice)
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, ScrollView,
   Modal, FlatList, KeyboardAvoidingView, Platform, ActivityIndicator,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useTheme } from '@/contexts/ThemeContext';
 import { addProduct, configureProductPurchaseUnit, updateProduct, createPurchase, getProductUnits, getProductByCatalogSourceId, getSuppliers, getProducts, getSetting, getUnitPrice, flushDatabaseWrites, Supplier, Product } from '@/services/database';
 import { getLocalDrugCatalog, refreshRemoteDrugCatalog, DrugCatalogRecord } from '@/services/drug-catalog';
@@ -30,6 +31,8 @@ export default function AddPurchaseScreen() {
   const { theme } = useTheme();
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  const { ocrDraft } = useLocalSearchParams<{ ocrDraft?: string }>();
+  const appliedOcrDraft = useRef(false);
   const { showAlert } = useAlert();
 
   const [supplier, setSupplier] = useState<Supplier | null>(null);
@@ -59,6 +62,61 @@ export default function AddPurchaseScreen() {
   const [draftPurchaseUnit, setDraftPurchaseUnit] = useState('علبة');
   const [draftConversionFactor, setDraftConversionFactor] = useState('10');
   const [draftSellingPrice, setDraftSellingPrice] = useState('0');
+
+  useEffect(() => {
+    if (ocrDraft !== '1' || appliedOcrDraft.current) return;
+    appliedOcrDraft.current = true;
+    void (async () => {
+      try {
+        const raw = await AsyncStorage.getItem('pharmacy_purchase_ocr_draft');
+        if (!raw) { showAlert('لا توجد مسودة OCR', 'ارجع إلى شاشة قراءة الفاتورة وأعد إرسال المسودة.'); return; }
+        await AsyncStorage.removeItem('pharmacy_purchase_ocr_draft');
+        const draft = JSON.parse(raw);
+        const products = getProducts({ activeOnly: true });
+        const mapped: PurchaseLineItem[] = [];
+        const unmatched: string[] = [];
+        for (const line of (Array.isArray(draft.items) ? draft.items : [])) {
+          const name = String(line.name || '').trim();
+          const normalized = name.toLocaleLowerCase();
+          let product = products.find(entry => entry.trade_name.trim().toLocaleLowerCase() === normalized || (entry.generic_name || '').trim().toLocaleLowerCase() === normalized);
+          if (!product && name) {
+            const matches = getProducts({ search: name, activeOnly: true });
+            if (matches.length === 1) product = matches[0];
+          }
+          if (!product) { unmatched.push(name || 'صنف غير معروف'); continue; }
+          const units = getProductUnits(product.id);
+          const defaultUnit = units.find(unit => unit.is_purchase_default)?.unit_name || product.inventory_unit;
+          const requestedUnit = String(line.unit || '').trim();
+          const unit = units.some(entry => entry.unit_name.toLocaleLowerCase() === requestedUnit.toLocaleLowerCase()) ? requestedUnit : defaultUnit;
+          const quantity = Number(line.quantity);
+          const price = Number(line.purchase_price);
+          if (!Number.isFinite(quantity) || quantity <= 0 || !Number.isFinite(price) || price < 0) {
+            unmatched.push(name + ' (الكمية/السعر يحتاج مراجعة)');
+            continue;
+          }
+          mapped.push({
+            product, unit, quantity: String(quantity), purchase_price: String(price),
+            batch_number: String(line.batch_number || ''), expiry_date: String(line.expiry_date || ''),
+            free_quantity: String(Number(line.free_quantity || 0)), discount: String(Number(line.discount || 0)),
+          });
+        }
+        setItems(mapped);
+        if (draft.invoice_number) setInvoiceNo(String(draft.invoice_number));
+        if (draft.date && /^\\d{4}-\\d{2}-\\d{2}$/.test(String(draft.date))) setDate(String(draft.date));
+        if (Number.isFinite(Number(draft.invoice_discount))) setInvoiceDiscount(String(Math.max(0, Number(draft.invoice_discount))));
+        if (Number.isFinite(Number(draft.amount_paid))) setAmountPaid(String(Math.max(0, Number(draft.amount_paid))));
+        if (draft.supplier_name) {
+          const supplierName = String(draft.supplier_name).trim().toLocaleLowerCase();
+          const match = getSuppliers().find(entry => entry.name.trim().toLocaleLowerCase() === supplierName);
+          if (match) setSupplier(match);
+        }
+        setNotes('مسودة مستخرجة بالذكاء الاصطناعي — راجع كل البيانات قبل حفظ الفاتورة.');
+        showAlert('تم تجهيز المسودة', 'تمت مطابقة ' + mapped.length + ' صنفاً من ' + (draft.items || []).length + '. راجع الكميات والأسعار والتشغيلات والصلاحية قبل اعتماد الفاتورة.' + (unmatched.length ? '\\nأصناف تحتاج إضافة أو مطابقة يدوية: ' + unmatched.slice(0, 5).join('، ') : ''));
+      } catch (error: any) {
+        showAlert('تعذر فتح مسودة OCR', error?.message || 'المسودة غير صالحة؛ أعد قراءة الصورة.');
+      }
+    })();
+  }, [ocrDraft, showAlert]);
 
   const currencySymbol = getSetting('currency_symbol') || 'ر.ي';
   const catalogMatches = searchDrugCatalog(catalogRecords, catalogQuery).slice(0, 100);
@@ -286,6 +344,10 @@ export default function AddPurchaseScreen() {
             <TouchableOpacity onPress={() => { void openCatalogPicker(); }} style={{ backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 6, flexDirection: 'row', alignItems: 'center', gap: 3 }}>
               <MaterialIcons name="library-books" size={15} color="#FFFFFF" />
               <Text style={{ color: '#FFFFFF', fontSize: 11, fontWeight: '600' }}>الكتالوج</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => router.push('/purchase-ocr' as any)} style={{ backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 8, paddingHorizontal: 7, paddingVertical: 6, flexDirection: 'row', alignItems: 'center', gap: 3 }}>
+              <MaterialIcons name="document-scanner" size={15} color="#FFFFFF" />
+              <Text style={{ color: '#FFFFFF', fontSize: 10, fontWeight: '600' }}>OCR</Text>
             </TouchableOpacity>
             <TouchableOpacity onPress={() => { setShowProductSearch(true); setProductResults(getProducts({ activeOnly: true })); }} style={{ backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 6, flexDirection: 'row', alignItems: 'center', gap: 3 }}>
               <MaterialIcons name="add" size={15} color="#FFFFFF" />
