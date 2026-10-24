@@ -9,6 +9,12 @@ import { getSetting, setSetting, getOpeningBalance, addOpeningBalance, flushData
 import { useAlert } from '@/template';
 import { PinSetup } from '@/components/ui';
 import * as ImagePicker from 'expo-image-picker';
+import * as SecureStore from 'expo-secure-store';
+import * as Print from 'expo-print';
+
+function escapePrintText(value: string): string {
+  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
 
 export default function SettingsScreen() {
   const { theme, mode, toggleTheme } = useTheme();
@@ -29,6 +35,7 @@ export default function SettingsScreen() {
   const [saved, setSaved] = useState(false);
   const [openingBalance, setOpeningBalance] = useState('');
   const [openingBalanceTotal, setOpeningBalanceTotal] = useState(0);
+  const [geminiApiKey, setGeminiApiKey] = useState('');
 
   useEffect(() => {
     setPharmacyName(getSetting('pharmacy_name') || '');
@@ -40,6 +47,7 @@ export default function SettingsScreen() {
     setCurrencySymbol(getSetting('currency_symbol') || 'ر.ي');
     setPinEnabled(getSetting('pin_enabled') === 'true');
     setOpeningBalanceTotal(getOpeningBalance());
+    SecureStore.getItemAsync('gemini_api_key').then(value => setGeminiApiKey(value || '')).catch(() => undefined);
   }, []);
 
   const handleSave = async () => {
@@ -51,6 +59,8 @@ export default function SettingsScreen() {
     setSetting('currency', currency.trim());
     setSetting('currency_symbol', currencySymbol.trim());
     try {
+      if (geminiApiKey.trim()) await SecureStore.setItemAsync('gemini_api_key', geminiApiKey.trim());
+      else await SecureStore.deleteItemAsync('gemini_api_key');
       await flushDatabaseWrites();
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
@@ -68,6 +78,18 @@ export default function SettingsScreen() {
       const asset = result.assets[0];
       // Store a self-contained image so print HTML can render it without a device file path.
       setPharmacyLogoUri(asset.base64 ? `data:${asset.mimeType || 'image/jpeg'};base64,${asset.base64}` : asset.uri);
+    }
+  };
+
+  const handleLocalPrintTest = async () => {
+    const logo = pharmacyLogoUri && pharmacyLogoUri.startsWith('data:image/')
+      ? '<img alt="logo" src="' + escapePrintText(pharmacyLogoUri) + '" style="max-width:110px;max-height:90px;object-fit:contain" />'
+      : '';
+    const html = '<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><style>body{font-family:Arial,sans-serif;padding:24px;color:#172b4d}header{text-align:center;border-bottom:2px solid #00875a;padding-bottom:16px}h1{font-size:22px;margin:8px}p{margin:5px 0}.sample{margin-top:28px;border:1px solid #ddd;padding:16px;border-radius:8px}</style></head><body><header>' + logo + '<h1>' + escapePrintText(pharmacyName || 'الصيدلية') + '</h1><p>' + escapePrintText(pharmacyPhone) + '</p><p>' + escapePrintText(pharmacyAddress) + '</p></header><section class="sample"><h2>اختبار الطباعة المحلية</h2><p>هذا نموذج تجريبي للتحقق من فتح نافذة الطباعة في أندرويد.</p><p>التاريخ: ' + escapePrintText(new Date().toLocaleString('ar')) + '</p></section></body></html>';
+    try {
+      await Print.printAsync({ html });
+    } catch (error: any) {
+      showAlert('تعذرت الطباعة المحلية', error?.message || 'تحقق من خدمة الطباعة في أندرويد.');
     }
   };
 
@@ -138,6 +160,10 @@ export default function SettingsScreen() {
             </TouchableOpacity>
             {pharmacyLogoUri ? <Image source={{ uri: pharmacyLogoUri }} style={{ width: 58, height: 58, borderRadius: 8 }} resizeMode="contain" /> : <View style={{ width: 58, height: 58, borderRadius: 8, backgroundColor: theme.colors.surfaceAlt, alignItems: 'center', justifyContent: 'center' }}><MaterialIcons name="local-pharmacy" size={26} color={theme.colors.textTertiary} /></View>}
           </View>
+          <TouchableOpacity onPress={() => { void handleLocalPrintTest(); }} style={{ marginBottom: 12, borderWidth: 1, borderColor: theme.colors.primary, borderRadius: 9, padding: 12, flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 8 }}>
+            <MaterialIcons name="print" size={18} color={theme.colors.primary} />
+            <Text style={{ color: theme.colors.primary, fontWeight: '800' }}>اختبار الطباعة المحلية</Text>
+          </TouchableOpacity>
           <View style={{ flexDirection: 'row', gap: 10 }}>
             <View style={{ flex: 1 }}>
               <Text style={labelStyle}>رمز العملة</Text>
@@ -192,9 +218,11 @@ export default function SettingsScreen() {
           {[
             { label: 'النسخ الاحتياطي', icon: 'backup', route: '/backup', color: '#00875A' },
             { label: 'سجل التدقيق', icon: 'history', route: '/audit-log', color: '#172B4D' },
-            { label: 'المستخدمون', icon: 'manage-accounts', route: '/users', color: '#0052CC' },
+            { label: 'المستخدمون والصلاحيات', icon: 'manage-accounts', route: '/users', color: '#0052CC' },
+            { label: 'فحص البيانات والنقل المحلي', icon: 'build-circle', route: '/system-tools', color: '#6554C0' },
+            { label: 'النقل المباشر عبر Wi-Fi', icon: 'swap-horiz', route: '/local-transfer', color: '#00875A' },
           ].map((item, i) => (
-            <TouchableOpacity key={item.label} onPress={() => router.push(item.route as any)} style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 14, borderBottomWidth: i < 2 ? 1 : 0, borderBottomColor: theme.colors.divider }}>
+            <TouchableOpacity key={item.label} onPress={() => router.push(item.route as any)} style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 14, borderBottomWidth: i < 4 ? 1 : 0, borderBottomColor: theme.colors.divider }}>
               <MaterialIcons name="chevron-left" size={18} color={theme.colors.textTertiary} />
               <Text style={{ flex: 1, fontSize: 14, color: theme.colors.textPrimary, textAlign: 'right', marginHorizontal: 10 }}>{item.label}</Text>
               <View style={{ width: 34, height: 34, borderRadius: 8, backgroundColor: item.color + '18', alignItems: 'center', justifyContent: 'center' }}>
@@ -202,6 +230,13 @@ export default function SettingsScreen() {
               </View>
             </TouchableOpacity>
           ))}
+        </View>
+
+        <Text style={{ fontSize: 13, fontWeight: '700', color: theme.colors.textPrimary, textAlign: 'right', marginBottom: 12, borderRightWidth: 3, borderRightColor: theme.colors.primary, paddingRight: 8 }}>المساعد الذكي وقراءة الفواتير</Text>
+        <View style={{ backgroundColor: theme.colors.surface, borderRadius: 12, borderWidth: 1, borderColor: theme.colors.border, padding: 14, marginBottom: 14 }}>
+          <Text style={labelStyle}>مفتاح Gemini API (اختياري)</Text>
+          <TextInput style={[inputStyle, { marginBottom: 8 }]} value={geminiApiKey} onChangeText={setGeminiApiKey} placeholder="أدخل مفتاح API لتفعيل OCR" placeholderTextColor={theme.colors.textTertiary} autoCapitalize="none" autoCorrect={false} secureTextEntry />
+          <Text style={{ color: theme.colors.textTertiary, fontSize: 11, textAlign: 'right', lineHeight: 17 }}>يُحفظ في التخزين الآمن للجهاز ولا يدخل في النسخ الاحتياطية. استخدام Gemini يتطلب اتصال إنترنت وحصة API متاحة؛ قيّد المفتاح في Google AI Studio ولا تضع مفتاحاً حساساً مشتركاً على أجهزة متعددة.</Text>
         </View>
 
         {/* App Info */}
