@@ -25,7 +25,7 @@ export default function CustomersScreen() {
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
-  const totalDebt = customers.reduce((s, c) => s + Math.max(0, c.balance), 0);
+  const totalDebt = getCustomers().reduce((sum, customer) => sum + Math.max(0, customer.balance), 0);
 
   const handleDelete = (c: Customer) => {
     showAlert(`حذف ${c.name}`, AR.deleteWarning, [
@@ -55,7 +55,7 @@ export default function CustomersScreen() {
         </View>
       </View>
 
-      {totalDebt > 0 && (
+      {(
         <View style={{ backgroundColor: '#DEEBFF', paddingHorizontal: 14, paddingVertical: 8, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
           <Text style={{ fontSize: 14, fontWeight: '800', color: '#0052CC' }}>{formatCurrency(totalDebt)}</Text>
           <Text style={{ fontSize: 13, color: '#0052CC' }}>إجمالي ديون العملاء</Text>
@@ -93,6 +93,15 @@ export default function CustomersScreen() {
                       </View>
                     </View>
                     {item.phone ? <Text style={{ fontSize: 12, color: theme.colors.textTertiary }}>{item.phone}</Text> : null}
+                    {item.credit_limit > 0 && <View style={{ marginTop: 5, width: 150 }}>
+                      <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 3 }}>
+                        <Text style={{ fontSize: 10, color: item.balance >= item.credit_limit ? theme.colors.error : theme.colors.textTertiary }}>{Math.min(100, Math.round(Math.max(0, item.balance) / item.credit_limit * 100))}%</Text>
+                        <Text style={{ fontSize: 10, color: theme.colors.textTertiary }}>سقف الدين {formatCurrency(item.credit_limit)}</Text>
+                      </View>
+                      <View style={{ height: 4, borderRadius: 3, backgroundColor: theme.colors.divider, overflow: 'hidden' }}>
+                        <View style={{ height: 4, width: `${Math.min(100, Math.max(0, item.balance) / item.credit_limit * 100)}%`, backgroundColor: item.balance >= item.credit_limit ? theme.colors.error : '#0052CC' }} />
+                      </View>
+                    </View>}
                   </View>
                 </View>
               </View>
