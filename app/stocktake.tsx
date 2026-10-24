@@ -1,7 +1,7 @@
 // Smart Pharmacy ERP — Batch-level stocktake
 import React, { useCallback, useMemo, useState } from 'react';
 import { View, Text, ScrollView, TextInput, TouchableOpacity } from 'react-native';
-import { useFocusEffect, useRouter } from 'expo-router';
+import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useTheme } from '@/contexts/ThemeContext';
@@ -21,25 +21,33 @@ export default function StocktakeScreen() {
   const [saving, setSaving] = useState(false);
   const [adjustmentReason, setAdjustmentReason] = useState('');
 
-  const rows = useMemo<StocktakeRow[]>(() => {
-    const products = getProducts({ search: search.trim() });
+  // Keep the complete stocktake independent of the visible search filter. Otherwise,
+  // counts entered before changing the search would silently be omitted from posting.
+  const allRows = useMemo<StocktakeRow[]>(() => {
+    const products = getProducts();
     const byId = new Map(products.map(p => [p.id, p]));
     return getAllBatches({ status: 'ACTIVE' })
       .filter(batch => byId.has(batch.product_id))
       .sort((a, b) => (byId.get(a.product_id)?.trade_name || '').localeCompare(byId.get(b.product_id)?.trade_name || '', 'ar'))
       .map(batch => ({ batch, product: byId.get(batch.product_id)!, counted: counts[batch.id] ?? String(batch.quantity) }));
-  }, [search, counts, refreshKey]);
+  }, [counts, refreshKey]);
 
-  const deltaRows = rows.filter(row => {
+  const normalizedSearch = search.trim().toLocaleLowerCase();
+  const rows = allRows.filter(row => !normalizedSearch ||
+    [row.product.trade_name, row.product.generic_name || '', row.batch.batch_number || '', row.product.barcode || '']
+      .some(value => value.toLocaleLowerCase().includes(normalizedSearch)));
+
+  // Validate and submit all entered counts, including rows currently hidden by search.
+  const deltaRows = allRows.filter(row => {
     const n = Number(row.counted);
     return row.counted.trim() !== '' && Number.isFinite(n) && n >= 0 && Math.abs(n - row.batch.quantity) > 1e-8;
   });
-  const invalidCount = rows.some(row => row.counted.trim() === '' || !Number.isFinite(Number(row.counted)) || Number(row.counted) < 0);
+  const invalidCount = allRows.some(row => row.counted.trim() === '' || !Number.isFinite(Number(row.counted)) || Number(row.counted) < 0);
 
   const submit = useCallback(() => {
     if (saving) return;
     if (invalidCount) {
-      showAlert('تحقق من الجرد', 'أدخل كمية فعلية صحيحة وغير سالبة لكل دفعة ظاهرة قبل اعتماد الجرد.');
+      showAlert('تحقق من الجرد', 'أدخل كمية فعلية صحيحة وغير سالبة لكل دفعة في الجرد قبل الاعتماد.');
       return;
     }
     if (!deltaRows.length) {
@@ -89,7 +97,7 @@ export default function StocktakeScreen() {
         <TextInput value={adjustmentReason} onChangeText={setAdjustmentReason} placeholder="سبب التسوية (إلزامي: تالف، كسر، فرق جرد...)" placeholderTextColor={theme.colors.textTertiary}
           style={{ marginTop: 10, backgroundColor: theme.colors.background, color: theme.colors.textPrimary, borderColor: theme.colors.border, borderWidth: 1, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 11, textAlign: 'right' }} />
         <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 10 }}>
-          <Text style={{ color: theme.colors.textSecondary, fontSize: 12 }}>الدفعات الظاهرة: {rows.length}</Text>
+          <Text style={{ color: theme.colors.textSecondary, fontSize: 12 }}>الدفعات الظاهرة: {rows.length} من {allRows.length}</Text>
           <Text style={{ color: deltaRows.length ? theme.colors.error : theme.colors.success, fontSize: 12, fontWeight: '700' }}>الفروقات: {deltaRows.length}</Text>
         </View>
       </View>
