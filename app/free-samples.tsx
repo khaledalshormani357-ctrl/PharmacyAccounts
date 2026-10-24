@@ -38,11 +38,17 @@ export default function FreeSamplesScreen() {
     // A ref blocks rapid repeated taps before React has rendered the disabled state.
     if (saveInProgress.current) return;
     if (!product || !unit) { showAlert('تنبيه', 'اختر الصنف ووحدة الكمية أولاً'); return; }
+    if (supplierId === null) { showAlert('المورد مطلوب', 'اختر المورد الذي قدّم العينة أو الهدية حتى تُسجّل الحركة على المورد الصحيح.'); return; }
+    const parsedQuantity = Number(quantity);
+    const parsedCost = Number(unitCost);
+    if (!Number.isFinite(parsedQuantity) || parsedQuantity <= 0) { showAlert('كمية غير صحيحة', 'أدخل كمية أكبر من صفر.'); return; }
+    if (!Number.isFinite(parsedCost) || parsedCost < 0) { showAlert('تكلفة غير صحيحة', 'أدخل تكلفة تقديرية تساوي صفرًا أو أكثر.'); return; }
+    if (expiryDate.trim() && !/^\d{4}-\d{2}-\d{2}$/.test(expiryDate.trim())) { showAlert('تاريخ غير صحيح', 'أدخل تاريخ الانتهاء بصيغة YYYY-MM-DD أو اتركه فارغًا.'); return; }
     saveInProgress.current = true;
     setSaving(true);
     try {
       const result = createFreeSampleReceipt({
-        product_id: product.id, unit, quantity: Number(quantity), unit_cost: Number(unitCost),
+        product_id: product.id, unit, quantity: parsedQuantity, unit_cost: parsedCost,
         batch_number: batchNumber, expiry_date: expiryDate, supplier_id: supplierId, reason,
       });
       if (!result.success) { showAlert('تعذر حفظ العينة', result.error); return; }
@@ -82,9 +88,8 @@ export default function FreeSamplesScreen() {
             ))}
           </View>
         </> : null}
-        <Text style={{ color: theme.colors.textSecondary, textAlign: 'right' }}>المورد (اختياري؛ لا يتغير رصيده المالي)</Text>
+        <Text style={{ color: theme.colors.textSecondary, textAlign: 'right' }}>المورد (مطلوب لتوثيق مصدر العينة؛ لا يتغير رصيده المالي)</Text>
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-          <TouchableOpacity onPress={() => setSupplierId(null)} style={{ padding: 9, borderRadius: 8, backgroundColor: supplierId === null ? theme.colors.primary : theme.colors.surface }}><Text style={{ color: supplierId === null ? '#fff' : theme.colors.textPrimary }}>بدون مورد</Text></TouchableOpacity>
           {suppliers.map(s => <TouchableOpacity key={s.id} onPress={() => setSupplierId(s.id)} style={{ padding: 9, borderRadius: 8, backgroundColor: supplierId === s.id ? theme.colors.primary : theme.colors.surface }}><Text style={{ color: supplierId === s.id ? '#fff' : theme.colors.textPrimary }}>{s.name}</Text></TouchableOpacity>)}
         </View>
         {fields.map(f => <View key={f.label} style={{ gap: 5 }}><Text style={{ color: theme.colors.textPrimary, textAlign: 'right' }}>{f.label}</Text><TextInput value={f.value} onChangeText={f.set} placeholder={f.placeholder} placeholderTextColor={theme.colors.textTertiary} keyboardType={'numeric' in f && f.numeric ? 'decimal-pad' : 'default'} style={inputStyle} /></View>)}
