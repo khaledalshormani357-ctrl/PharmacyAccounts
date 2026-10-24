@@ -6,7 +6,7 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useFocusEffect } from 'expo-router';
 import { useTheme } from '@/contexts/ThemeContext';
-import { getSupplier, getSupplierTransactions, recordSupplierPayment, getSetting, Supplier, SupplierTransaction } from '@/services/database';
+import { getSupplier, getSupplierTransactions, recordSupplierPayment, getSetting, Supplier, SupplierTransaction, CASHBOXES, CashboxId } from '@/services/database';
 import { formatCurrency, AR } from '@/constants/i18n';
 import { useAlert } from '@/template';
 import { PdfActions } from '@/components/PdfActions';
@@ -23,6 +23,8 @@ export default function SupplierDetailScreen() {
   const [showPayment, setShowPayment] = useState(false);
   const [payAmount, setPayAmount] = useState('');
   const [payNote, setPayNote] = useState('');
+  const [cashboxId, setCashboxId] = useState<CashboxId>('daily');
+  const [paymentMethod, setPaymentMethod] = useState('نقداً');
 
   const load = useCallback(() => {
     if (!id) return;
@@ -36,7 +38,8 @@ export default function SupplierDetailScreen() {
   const handlePayment = () => {
     const amount = parseFloat(payAmount);
     if (!amount || amount <= 0) { showAlert('تنبيه', 'أدخل مبلغاً صحيحاً'); return; }
-    recordSupplierPayment(parseInt(id!), amount, payNote || 'دفعة للمورد');
+    try { recordSupplierPayment(parseInt(id!), amount, payNote || 'دفعة للمورد', cashboxId, paymentMethod); }
+    catch (error) { showAlert('تعذر تسجيل السند', error instanceof Error ? error.message : 'حدث خطأ غير متوقع'); return; }
     setShowPayment(false); setPayAmount(''); setPayNote('');
     load();
     showAlert('تم', `تم تسجيل دفعة ${formatCurrency(amount)}`);
@@ -75,6 +78,7 @@ export default function SupplierDetailScreen() {
               <MaterialIcons name="arrow-forward" size={20} color="#FFFFFF" />
             </TouchableOpacity>
             <PdfActions buildHtml={buildStatementPdf} title={`كشف حساب ${supplier.name}`} onError={(message) => showAlert('خطأ', message)} />
+            <TouchableOpacity onPress={() => router.push({ pathname: '/add-supplier', params: { id: String(supplier.id) } })} style={{ width: 34, height: 34, backgroundColor: 'rgba(255,255,255,0.15)', borderRadius: 8, alignItems: 'center', justifyContent: 'center' }}><MaterialIcons name="edit" size={18} color="#FFFFFF" /></TouchableOpacity>
           </View>
           <Text style={{ fontSize: 16, fontWeight: '700', color: '#FFFFFF' }}>{supplier.name}</Text>
           <TouchableOpacity onPress={() => setShowPayment(true)} style={{ backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 6 }}>
@@ -139,6 +143,10 @@ export default function SupplierDetailScreen() {
             <Text style={{ fontSize: 16, fontWeight: '700', color: theme.colors.textPrimary, textAlign: 'right', marginBottom: 6 }}>دفعة للمورد — {supplier.name}</Text>
             {supplier.balance > 0 && <Text style={{ fontSize: 13, color: theme.colors.error, textAlign: 'right', marginBottom: 14 }}>المستحق: {formatCurrency(supplier.balance)}</Text>}
             <TextInput value={payAmount} onChangeText={setPayAmount} keyboardType="numeric" placeholder="المبلغ" placeholderTextColor={theme.colors.textTertiary} style={{ height: 52, borderRadius: 10, borderWidth: 1.5, borderColor: '#6554C0', paddingHorizontal: 12, fontSize: 20, fontWeight: '700', textAlign: 'center', color: theme.colors.textPrimary, marginBottom: 10 }} />
+            <Text style={{ color: theme.colors.textSecondary, textAlign: 'right', marginBottom: 6, fontSize: 12 }}>طريقة الدفع</Text>
+            <View style={{ flexDirection: 'row-reverse', flexWrap: 'wrap', gap: 6, marginBottom: 12 }}>{['نقداً', 'تحويل بنكي', 'شبكة'].map(method => <TouchableOpacity key={method} onPress={() => setPaymentMethod(method)} style={{ paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8, borderWidth: 1, borderColor: paymentMethod === method ? '#6554C0' : theme.colors.border, backgroundColor: paymentMethod === method ? '#6554C018' : theme.colors.surface }}><Text style={{ color: theme.colors.textPrimary, fontSize: 12 }}>{method}</Text></TouchableOpacity>)}</View>
+            <Text style={{ color: theme.colors.textSecondary, textAlign: 'right', marginBottom: 6, fontSize: 12 }}>الصندوق / الحساب الذي صُرفت منه الدفعة</Text>
+            <View style={{ flexDirection: 'row-reverse', flexWrap: 'wrap', gap: 6, marginBottom: 12 }}>{CASHBOXES.map(box => <TouchableOpacity key={box.id} onPress={() => setCashboxId(box.id)} style={{ paddingHorizontal: 10, paddingVertical: 8, borderRadius: 8, borderWidth: 1, borderColor: cashboxId === box.id ? '#6554C0' : theme.colors.border, backgroundColor: cashboxId === box.id ? '#6554C018' : theme.colors.surface }}><Text style={{ color: theme.colors.textPrimary, fontSize: 12 }}>{box.label}</Text></TouchableOpacity>)}</View>
             <TextInput value={payNote} onChangeText={setPayNote} placeholder="ملاحظة" placeholderTextColor={theme.colors.textTertiary} style={{ height: 44, borderRadius: 8, borderWidth: 1, borderColor: theme.colors.border, paddingHorizontal: 12, fontSize: 13, textAlign: 'right', color: theme.colors.textPrimary, marginBottom: 16 }} />
             <View style={{ flexDirection: 'row', gap: 10 }}>
               <TouchableOpacity onPress={() => setShowPayment(false)} style={{ flex: 1, height: 48, backgroundColor: theme.colors.surfaceAlt, borderRadius: 10, alignItems: 'center', justifyContent: 'center' }}>

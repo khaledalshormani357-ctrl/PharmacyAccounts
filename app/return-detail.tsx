@@ -1,12 +1,12 @@
-import React from 'react';
-import { ScrollView, Text, TouchableOpacity, View } from 'react-native';
+import React, { useState } from 'react';
+import { Alert, ScrollView, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '@/contexts/ThemeContext';
 import {
   getPurchase, getPurchaseReturn, getSale, getSaleReturn,
-  PurchaseReturn, SaleReturn, getSetting,
+  PurchaseReturn, SaleReturn, getSetting, cancelPurchaseReturn, cancelSaleReturn, flushDatabaseWrites,
 } from '@/services/database';
 import { formatCurrency, formatDate } from '@/constants/i18n';
 import { PdfActions } from '@/components/PdfActions';
@@ -28,6 +28,9 @@ export default function ReturnDetailScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { showAlert } = useAlert();
+  const [cancelReason, setCancelReason] = useState('');
+  const [cancelModal, setCancelModal] = useState(false);
+  const [, setRevision] = useState(0);
   const params = useLocalSearchParams<{ type?: string | string[]; returnId?: string | string[] }>();
   const kind = params.type === 'purchase' || (Array.isArray(params.type) && params.type[0] === 'purchase') ? 'purchase' : 'sale';
   const rawId = Array.isArray(params.returnId) ? params.returnId[0] : params.returnId;
@@ -78,17 +81,17 @@ export default function ReturnDetailScreen() {
       </View>
 
       <ScrollView contentContainerStyle={{ padding: 14, paddingBottom: 32 }}>
-        <TouchableOpacity onPress={() => router.push({ pathname: kind === 'sale' ? '/sale-detail' : '/purchase-detail', params: { id: String(kind === 'sale' ? (record as SaleReturn).sale_id : (record as PurchaseReturn).purchase_id) } } as any)} style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 12, borderRadius: 10, backgroundColor: theme.colors.surface, borderWidth: 1, borderColor: theme.colors.border, marginBottom: 12 }}>
+        {!record.is_direct &&         <TouchableOpacity onPress={() => router.push({ pathname: kind === 'sale' ? '/sale-detail' : '/purchase-detail', params: { id: String(kind === 'sale' ? (record as SaleReturn).sale_id : (record as PurchaseReturn).purchase_id) } } as any)} style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 12, borderRadius: 10, backgroundColor: theme.colors.surface, borderWidth: 1, borderColor: theme.colors.border, marginBottom: 12 }}>
           <MaterialIcons name="open-in-new" size={18} color={theme.colors.primary} />
           <Text style={{ color: theme.colors.primary, fontWeight: '700' }}>عرض الفاتورة الأصلية — {original?.invoice_number || record.invoice_number}</Text>
-        </TouchableOpacity>
+        </TouchableOpacity>}
 
         <View style={{ padding: 14, borderRadius: 11, backgroundColor: theme.colors.surface, borderWidth: 1, borderColor: theme.colors.border, marginBottom: 12 }}>
           <Text style={{ textAlign: 'right', fontWeight: '800', color: theme.colors.textPrimary, marginBottom: 9 }}>بيانات المعاملة</Text>
           {[
             ['طريقة التسوية', settlement],
             ['المستخدم', record.user_name || 'غير مسجل'],
-            ['الحالة', record.status === 'POSTED' ? 'معتمد — سجل ثابت' : 'مسجل'],
+            ['الحالة', record.status === 'CANCELLED' ? 'ملغى — تم عكس الأثر' : record.status === 'POSTED' ? 'معتمد' : 'مسجل'],
             ...(kind === 'sale' ? [['حالة البضاعة', (record as SaleReturn).condition === 'DAMAGED' ? 'تالف / محجور خارج الرصيد المتاح' : 'صالح لإعادة البيع']] : []),
           ].map(([label, value], index) => <View key={index} style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 6, borderBottomWidth: index < 3 ? 1 : 0, borderBottomColor: theme.colors.divider }}><Text style={{ color: theme.colors.textPrimary, fontSize: 12 }}>{value}</Text><Text style={{ color: theme.colors.textSecondary, fontSize: 12 }}>{label}</Text></View>)}
         </View>
@@ -108,8 +111,31 @@ export default function ReturnDetailScreen() {
           })}
           <View style={{ padding: 13, flexDirection: 'row', justifyContent: 'space-between', backgroundColor: theme.colors.surfaceAlt }}><Text style={{ color: accent, fontWeight: '900', fontSize: 16 }}>{formatCurrency(record.total)}</Text><Text style={{ color: theme.colors.textPrimary, fontWeight: '900' }}>إجمالي المرتجع</Text></View>
         </View>
+        {record.status !== 'CANCELLED' ? <TouchableOpacity
+          onPress={() => { setCancelReason(''); setCancelModal(true); }}
+          style={{ marginTop: 14, minHeight: 46, borderRadius: 10, borderWidth: 1, borderColor: theme.colors.error, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.surface }}>
+          <Text style={{ color: theme.colors.error, fontWeight: '800' }}>إلغاء المرتجع وعكس أثره</Text>
+        </TouchableOpacity> : <View style={{ marginTop: 14, padding: 12, borderRadius: 10, backgroundColor: theme.colors.surfaceAlt }}><Text style={{ textAlign: 'center', color: theme.colors.error, fontWeight: '800' }}>هذا المرتجع ملغى — {record.notes || 'تم عكس أثره المالي والمخزني'}</Text></View>}
+        {cancelModal && <View style={{ marginTop: 14, padding: 14, borderRadius: 12, backgroundColor: theme.colors.surface, borderWidth: 1, borderColor: theme.colors.error }}>
+          <Text style={{ color: theme.colors.textPrimary, textAlign: 'right', fontWeight: '800', marginBottom: 8 }}>سبب إلغاء المرتجع (إلزامي)</Text>
+          <TextInput value={cancelReason} onChangeText={setCancelReason} placeholder="اكتب سببًا واضحًا للإلغاء" placeholderTextColor={theme.colors.textTertiary} multiline textAlign="right" style={{ minHeight: 76, color: theme.colors.textPrimary, borderWidth: 1, borderColor: theme.colors.border, borderRadius: 8, padding: 10, marginBottom: 10 }} />
+          <View style={{ flexDirection: 'row', gap: 8 }}>
+            <TouchableOpacity onPress={() => setCancelModal(false)} style={{ flex: 1, padding: 12, borderRadius: 8, alignItems: 'center', backgroundColor: theme.colors.surfaceAlt }}><Text style={{ color: theme.colors.textPrimary }}>تراجع</Text></TouchableOpacity>
+            <TouchableOpacity onPress={() => Alert.alert('تأكيد الإلغاء', 'سيتم عكس الأثر المخزني والمالي وتسجيل السبب في سجل التدقيق. هل تريد المتابعة؟', [
+              { text: 'إبقاء المرتجع', style: 'cancel' },
+              { text: 'تأكيد الإلغاء', style: 'destructive', onPress: async () => {
+                const reason = cancelReason.trim();
+                if (!reason) { showAlert('سبب الإلغاء مطلوب', 'اكتب سبب الإلغاء قبل المتابعة.'); return; }
+                const result = kind === 'sale' ? cancelSaleReturn(record.id, reason) : cancelPurchaseReturn(record.id, reason);
+                if (!result.success) { showAlert('تعذر الإلغاء', result.error); return; }
+                try { await flushDatabaseWrites(); setCancelModal(false); setRevision(v => v + 1); showAlert('تم الإلغاء', 'تم تسجيل الإلغاء. راجع سجل المرتجعات للتأكد من الأرصدة.'); router.back(); }
+                catch { showAlert('تحقق من السجل', 'تعذر تأكيد الحفظ النهائي؛ افحص سجل المرتجعات قبل إعادة المحاولة.'); }
+              } },
+            ])} style={{ flex: 1, padding: 12, borderRadius: 8, alignItems: 'center', backgroundColor: theme.colors.error }}><Text style={{ color: '#FFFFFF', fontWeight: '800' }}>تأكيد الإلغاء</Text></TouchableOpacity>
+          </View>
+        </View>}
         {record.notes ? <View style={{ marginTop: 12, padding: 12, borderRadius: 10, backgroundColor: theme.colors.surfaceAlt }}><Text style={{ color: theme.colors.textSecondary, textAlign: 'right', fontSize: 11 }}>ملاحظات</Text><Text style={{ color: theme.colors.textPrimary, textAlign: 'right', marginTop: 4 }}>{record.notes}</Text></View> : null}
-        <Text style={{ color: theme.colors.textTertiary, textAlign: 'center', fontSize: 10, marginTop: 14 }}>هذا مستند مستقل؛ الفاتورة الأصلية باقية دون تعديل. لا يمكن حذف المرتجع المعتمد.</Text>
+        <Text style={{ color: theme.colors.textTertiary, textAlign: 'center', fontSize: 10, marginTop: 14 }}>هذا مستند مستقل؛ الفاتورة الأصلية باقية دون تعديل. لا يُحذف المستند؛ الإلغاء يسجل كحركة عكسية قابلة للتدقيق.</Text>
       </ScrollView>
     </View>
   );

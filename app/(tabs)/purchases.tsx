@@ -30,7 +30,7 @@ export default function PurchasesScreen() {
   const load = useCallback(() => {
     try {
       const { from, to } = getDateRange(period);
-      let result = getPurchases({ dateFrom: from, dateTo: to });
+      let result = getPurchases({ dateFrom: from, dateTo: to, includeCancelled: true });
       if (search) result = result.filter(p => (p.supplier_name || '').includes(search) || p.invoice_number.includes(search));
       setPurchases(result);
     } catch {}
@@ -38,9 +38,10 @@ export default function PurchasesScreen() {
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
-  const totalAmount = purchases.reduce((s, p) => s + p.total, 0);
-  const totalPaid = purchases.reduce((s, p) => s + p.amount_paid, 0);
-  const totalRemaining = purchases.reduce((s, p) => s + p.remaining, 0);
+  const activePurchases = purchases.filter(p => !p.cancelled);
+  const totalAmount = activePurchases.reduce((s, p) => s + p.total, 0);
+  const totalPaid = activePurchases.reduce((s, p) => s + p.amount_paid, 0);
+  const totalRemaining = activePurchases.reduce((s, p) => s + p.remaining, 0);
   const buildPurchasesPdf = () => {
     const { from, to } = getDateRange(period);
     const periodLabel = PERIODS.find(item => item.key === period)?.label || period;
@@ -51,13 +52,13 @@ export default function PurchasesScreen() {
       dateRange: from === to ? from : `${from} — ${to}`,
       accent: '#6554C0',
       summary: [
-        { label: 'عدد الفواتير', value: purchases.length },
+        { label: 'عدد الفواتير النشطة', value: activePurchases.length },
         { label: 'إجمالي المشتريات', value: formatCurrency(totalAmount) },
         { label: 'المتبقي للموردين', value: formatCurrency(totalRemaining), tone: 'negative' },
         { label: 'المدفوع', value: formatCurrency(totalPaid), tone: 'positive' },
       ],
       columns: ['الفاتورة', 'المورد', 'التاريخ', 'الإجمالي', 'المدفوع', 'المتبقي'],
-      rows: purchases.map(purchase => [purchase.invoice_number, purchase.supplier_name || 'مورد مباشر', formatDate(purchase.date), formatCurrency(purchase.total), formatCurrency(purchase.amount_paid), formatCurrency(purchase.remaining)]),
+      rows: purchases.filter(purchase => !purchase.cancelled).map(purchase => [purchase.invoice_number, purchase.supplier_name || 'مورد مباشر', formatDate(purchase.date), formatCurrency(purchase.total), formatCurrency(purchase.amount_paid), formatCurrency(purchase.remaining)]),
       footerNote: search ? 'تم تطبيق البحث الحالي على التقرير.' : undefined,
     });
   };
@@ -124,13 +125,13 @@ export default function PurchasesScreen() {
               <MaterialIcons name="chevron-left" size={16} color={theme.colors.textTertiary} />
               <View style={{ flex: 1, marginHorizontal: 10 }}>
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 3 }}>
-                  <Text style={{ fontSize: 15, fontWeight: '800', color: '#6554C0' }}>{formatCurrency(item.total)}</Text>
-                  <Text style={{ fontSize: 14, fontWeight: '600', color: theme.colors.textPrimary }}>{item.supplier_name || 'مورد مباشر'}</Text>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}><Text style={{ fontSize: 15, fontWeight: '800', color: item.cancelled ? theme.colors.textTertiary : '#6554C0', textDecorationLine: item.cancelled ? 'line-through' : 'none' }}>{formatCurrency(item.total)}</Text>{item.cancelled && <Text style={{ fontSize: 10, color: theme.colors.error, fontWeight: '800' }}>ملغاة</Text>}</View>
+                  <Text style={{ fontSize: 14, fontWeight: '600', color: item.cancelled ? theme.colors.textTertiary : theme.colors.textPrimary }}>{item.supplier_name || 'مورد مباشر'}</Text>
                 </View>
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
                   <View style={{ flexDirection: 'row', gap: 8 }}>
-                    {item.remaining > 0 && <Text style={{ fontSize: 11, color: theme.colors.error, fontWeight: '600' }}>متبقي: {formatCurrency(item.remaining)}</Text>}
-                    {item.amount_paid > 0 && <Text style={{ fontSize: 11, color: theme.colors.success }}>مدفوع: {formatCurrency(item.amount_paid)}</Text>}
+                    {!item.cancelled && item.remaining > 0 && <Text style={{ fontSize: 11, color: theme.colors.error, fontWeight: '600' }}>متبقي: {formatCurrency(item.remaining)}</Text>}
+                    {!item.cancelled && item.amount_paid > 0 && <Text style={{ fontSize: 11, color: theme.colors.success }}>مدفوع: {formatCurrency(item.amount_paid)}</Text>}
                   </View>
                   <Text style={{ fontSize: 11, color: theme.colors.textTertiary }}>{item.invoice_number} · {formatDate(item.date)}</Text>
                 </View>

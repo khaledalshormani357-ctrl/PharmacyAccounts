@@ -6,7 +6,7 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useFocusEffect } from 'expo-router';
 import { useTheme } from '@/contexts/ThemeContext';
-import { getCustomer, getCustomerTransactions, recordCustomerPayment, getSetting, Customer, CustomerTransaction } from '@/services/database';
+import { getCustomer, getCustomerTransactions, recordCustomerPayment, getSetting, Customer, CustomerTransaction, CASHBOXES, CashboxId } from '@/services/database';
 import { formatCurrency, formatDate, AR } from '@/constants/i18n';
 import { useAlert } from '@/template';
 import { PdfActions } from '@/components/PdfActions';
@@ -23,6 +23,8 @@ export default function CustomerDetailScreen() {
   const [showPayment, setShowPayment] = useState(false);
   const [payAmount, setPayAmount] = useState('');
   const [payNote, setPayNote] = useState('');
+  const [cashboxId, setCashboxId] = useState<CashboxId>('daily');
+  const [paymentMethod, setPaymentMethod] = useState('نقداً');
 
   const load = useCallback(() => {
     if (!id) return;
@@ -36,7 +38,8 @@ export default function CustomerDetailScreen() {
   const handlePayment = () => {
     const amount = parseFloat(payAmount);
     if (!amount || amount <= 0) { showAlert('تنبيه', 'أدخل مبلغاً صحيحاً'); return; }
-    recordCustomerPayment(parseInt(id!), amount, payNote || 'سداد دين');
+    try { recordCustomerPayment(parseInt(id!), amount, payNote || 'سداد دين', cashboxId, paymentMethod); }
+    catch (error) { showAlert('تعذر تسجيل السند', error instanceof Error ? error.message : 'حدث خطأ غير متوقع'); return; }
     setShowPayment(false);
     setPayAmount('');
     setPayNote('');
@@ -86,6 +89,7 @@ export default function CustomerDetailScreen() {
               <MaterialIcons name="arrow-forward" size={20} color="#FFFFFF" />
             </TouchableOpacity>
             <PdfActions buildHtml={buildStatementPdf} title={`كشف حساب ${customer.name}`} onError={(message) => showAlert('خطأ', message)} />
+            <TouchableOpacity onPress={() => router.push({ pathname: '/add-customer', params: { id: String(customer.id) } })} style={{ width: 34, height: 34, backgroundColor: 'rgba(255,255,255,0.15)', borderRadius: 8, alignItems: 'center', justifyContent: 'center' }}><MaterialIcons name="edit" size={18} color="#FFFFFF" /></TouchableOpacity>
           </View>
           <Text style={{ fontSize: 16, fontWeight: '700', color: '#FFFFFF' }}>{customer.name}</Text>
           <TouchableOpacity onPress={() => setShowPayment(true)} style={{ backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 6 }}>
@@ -162,6 +166,10 @@ export default function CustomerDetailScreen() {
             <Text style={{ fontSize: 16, fontWeight: '700', color: theme.colors.textPrimary, textAlign: 'right', marginBottom: 6 }}>تسجيل سداد — {customer.name}</Text>
             {customer.balance > 0 && <Text style={{ fontSize: 13, color: theme.colors.error, textAlign: 'right', marginBottom: 14 }}>المبلغ المستحق: {formatCurrency(customer.balance)}</Text>}
             <TextInput value={payAmount} onChangeText={setPayAmount} keyboardType="numeric" placeholder="المبلغ" placeholderTextColor={theme.colors.textTertiary} style={{ height: 52, borderRadius: 10, borderWidth: 1.5, borderColor: '#0052CC', paddingHorizontal: 12, fontSize: 20, fontWeight: '700', textAlign: 'center', color: theme.colors.textPrimary, marginBottom: 10 }} />
+            <Text style={{ color: theme.colors.textSecondary, textAlign: 'right', marginBottom: 6, fontSize: 12 }}>طريقة القبض</Text>
+            <View style={{ flexDirection: 'row-reverse', flexWrap: 'wrap', gap: 6, marginBottom: 12 }}>{['نقداً', 'تحويل بنكي', 'شبكة'].map(method => <TouchableOpacity key={method} onPress={() => setPaymentMethod(method)} style={{ paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8, borderWidth: 1, borderColor: paymentMethod === method ? '#0052CC' : theme.colors.border, backgroundColor: paymentMethod === method ? '#0052CC18' : theme.colors.surface }}><Text style={{ color: theme.colors.textPrimary, fontSize: 12 }}>{method}</Text></TouchableOpacity>)}</View>
+            <Text style={{ color: theme.colors.textSecondary, textAlign: 'right', marginBottom: 6, fontSize: 12 }}>الصندوق المستلم</Text>
+            <View style={{ flexDirection: 'row-reverse', flexWrap: 'wrap', gap: 6, marginBottom: 12 }}>{CASHBOXES.map(box => <TouchableOpacity key={box.id} onPress={() => setCashboxId(box.id)} style={{ paddingHorizontal: 10, paddingVertical: 8, borderRadius: 8, borderWidth: 1, borderColor: cashboxId === box.id ? '#0052CC' : theme.colors.border, backgroundColor: cashboxId === box.id ? '#0052CC18' : theme.colors.surface }}><Text style={{ color: theme.colors.textPrimary, fontSize: 12 }}>{box.label}</Text></TouchableOpacity>)}</View>
             <TextInput value={payNote} onChangeText={setPayNote} placeholder="ملاحظة (اختياري)" placeholderTextColor={theme.colors.textTertiary} style={{ height: 44, borderRadius: 8, borderWidth: 1, borderColor: theme.colors.border, paddingHorizontal: 12, fontSize: 13, textAlign: 'right', color: theme.colors.textPrimary, marginBottom: 16 }} />
             <View style={{ flexDirection: 'row', gap: 10 }}>
               <TouchableOpacity onPress={() => setShowPayment(false)} style={{ flex: 1, height: 48, backgroundColor: theme.colors.surfaceAlt, borderRadius: 10, alignItems: 'center', justifyContent: 'center' }}>
