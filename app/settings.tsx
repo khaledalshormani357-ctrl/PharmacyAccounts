@@ -10,6 +10,11 @@ import { useAlert } from '@/template';
 import { PinSetup } from '@/components/ui';
 import * as ImagePicker from 'expo-image-picker';
 import * as SecureStore from 'expo-secure-store';
+import * as Print from 'expo-print';
+
+function escapePrintText(value: string): string {
+  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
 
 export default function SettingsScreen() {
   const { theme, mode, toggleTheme } = useTheme();
@@ -73,6 +78,18 @@ export default function SettingsScreen() {
       const asset = result.assets[0];
       // Store a self-contained image so print HTML can render it without a device file path.
       setPharmacyLogoUri(asset.base64 ? `data:${asset.mimeType || 'image/jpeg'};base64,${asset.base64}` : asset.uri);
+    }
+  };
+
+  const handleLocalPrintTest = async () => {
+    const logo = pharmacyLogoUri && pharmacyLogoUri.startsWith('data:image/')
+      ? '<img alt="logo" src="' + escapePrintText(pharmacyLogoUri) + '" style="max-width:110px;max-height:90px;object-fit:contain" />'
+      : '';
+    const html = '<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><style>body{font-family:Arial,sans-serif;padding:24px;color:#172b4d}header{text-align:center;border-bottom:2px solid #00875a;padding-bottom:16px}h1{font-size:22px;margin:8px}p{margin:5px 0}.sample{margin-top:28px;border:1px solid #ddd;padding:16px;border-radius:8px}</style></head><body><header>' + logo + '<h1>' + escapePrintText(pharmacyName || 'الصيدلية') + '</h1><p>' + escapePrintText(pharmacyPhone) + '</p><p>' + escapePrintText(pharmacyAddress) + '</p></header><section class="sample"><h2>اختبار الطباعة المحلية</h2><p>هذا نموذج تجريبي للتحقق من فتح نافذة الطباعة في أندرويد.</p><p>التاريخ: ' + escapePrintText(new Date().toLocaleString('ar')) + '</p></section></body></html>';
+    try {
+      await Print.printAsync({ html });
+    } catch (error: any) {
+      showAlert('تعذرت الطباعة المحلية', error?.message || 'تحقق من خدمة الطباعة في أندرويد.');
     }
   };
 
@@ -143,6 +160,10 @@ export default function SettingsScreen() {
             </TouchableOpacity>
             {pharmacyLogoUri ? <Image source={{ uri: pharmacyLogoUri }} style={{ width: 58, height: 58, borderRadius: 8 }} resizeMode="contain" /> : <View style={{ width: 58, height: 58, borderRadius: 8, backgroundColor: theme.colors.surfaceAlt, alignItems: 'center', justifyContent: 'center' }}><MaterialIcons name="local-pharmacy" size={26} color={theme.colors.textTertiary} /></View>}
           </View>
+          <TouchableOpacity onPress={() => { void handleLocalPrintTest(); }} style={{ marginBottom: 12, borderWidth: 1, borderColor: theme.colors.primary, borderRadius: 9, padding: 12, flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 8 }}>
+            <MaterialIcons name="print" size={18} color={theme.colors.primary} />
+            <Text style={{ color: theme.colors.primary, fontWeight: '800' }}>اختبار الطباعة المحلية</Text>
+          </TouchableOpacity>
           <View style={{ flexDirection: 'row', gap: 10 }}>
             <View style={{ flex: 1 }}>
               <Text style={labelStyle}>رمز العملة</Text>
