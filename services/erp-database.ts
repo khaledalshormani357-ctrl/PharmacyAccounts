@@ -2361,7 +2361,7 @@ export function recordCustomerPayment(customer_id: number, amount: number, note?
     amount: -amount,
     balance_after: customer.balance,
     reference_id: null,
-    note: note ?? 'سداد دين',
+    note: `${payment_method} — ${note ?? 'سداد دين'}`,
     date: today(),
     created_at: now(),
   });
@@ -2451,7 +2451,7 @@ export function recordSupplierPayment(supplier_id: number, amount: number, note?
     amount: -amount,
     balance_after: supplier.balance,
     reference_id: null,
-    note: note ?? 'دفعة للمورد',
+    note: `${payment_method} — ${note ?? 'دفعة للمورد'}`,
     date: today(),
     created_at: now(),
   });
