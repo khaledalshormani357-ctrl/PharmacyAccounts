@@ -83,6 +83,7 @@ export default function MoreScreen() {
           <MenuItem icon="people" label="العملاء" sublabel="إدارة الحسابات والديون" color="#0052CC" onPress={() => router.push('/customers')} />
           <MenuItem icon="local-shipping" label="الموردون" sublabel="إدارة المشتريات والمدفوعات" color="#6554C0" onPress={() => router.push('/suppliers')} />
           <MenuItem icon="money-off" label="المصروفات" color="#DE350B" onPress={() => router.push('/expenses')} />
+          <MenuItem icon="account-tree" label="دليل حسابات المصروفات" sublabel="إضافة وإدارة تصنيفات المصروفات" color="#DE350B" onPress={() => router.push('/expense-accounts' as any)} />
           <MenuItem icon="account-balance" label="الصندوق" sublabel={formatCurrency(cashBalance)} color="#00875A" onPress={() => router.push('/cashbox')} />
           <MenuItem icon="work" label="الورديات" color="#0052CC" onPress={() => router.push('/shifts')} />
         </Section>
