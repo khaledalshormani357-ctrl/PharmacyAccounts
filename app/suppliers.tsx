@@ -25,7 +25,7 @@ export default function SuppliersScreen() {
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
-  const totalDebt = suppliers.reduce((s, sup) => s + Math.max(0, sup.balance), 0);
+  const totalDebt = getSuppliers().reduce((sum, supplier) => sum + Math.max(0, supplier.balance), 0);
 
   return (
     <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
@@ -48,7 +48,7 @@ export default function SuppliersScreen() {
         </View>
       </View>
 
-      {totalDebt > 0 && (
+      {(
         <View style={{ backgroundColor: '#EAE6FF', paddingHorizontal: 14, paddingVertical: 8, flexDirection: 'row', justifyContent: 'space-between' }}>
           <Text style={{ fontSize: 14, fontWeight: '800', color: '#6554C0' }}>{formatCurrency(totalDebt)}</Text>
           <Text style={{ fontSize: 13, color: '#6554C0' }}>إجمالي المستحقات للموردين</Text>
