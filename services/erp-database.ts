@@ -3297,11 +3297,12 @@ export function inspectAndRepairDatabase(repair = false): DatabaseIntegrityRepor
     if (Number.isFinite(batch.quantity) && batch.quantity <= 1e-8 && batch.status !== 'DEPLETED') targetStatus = 'DEPLETED';
     else if (batch.status === 'ACTIVE' && !!batch.expiry_date && batch.expiry_date <= today()) targetStatus = 'EXPIRED';
     if (targetStatus && targetStatus !== batch.status) {
+      const previousStatus = batch.status;
       batch.status = targetStatus;
       repaired += 1;
       addAuditLog({
         action: 'DATABASE_SAFE_REPAIR', entity: 'batch', entity_id: batch.id,
-        before_data: JSON.stringify({ status: targetStatus === 'DEPLETED' ? 'ACTIVE_OR_STALE' : 'ACTIVE' }),
+        before_data: JSON.stringify({ status: previousStatus }),
         after_data: JSON.stringify({ status: targetStatus, quantity: batch.quantity, expiry_date: batch.expiry_date }),
         reason: 'تصحيح حالة مشتقة فقط؛ لم تتغير الكمية أو المعاملات المالية',
       });
