@@ -2325,9 +2325,9 @@ export function cancelPurchaseInvoice(id: number, reason: string, user_id?: numb
 }
 
 export function getPurchases(opts?: {
-  dateFrom?: string; dateTo?: string; supplier_id?: number; limit?: number;
+  dateFrom?: string; dateTo?: string; supplier_id?: number; limit?: number; includeCancelled?: boolean;
 }): Purchase[] {
-  let result = store.purchases.filter(p => !p.cancelled);
+  let result = store.purchases.filter(p => opts?.includeCancelled || !p.cancelled);
   if (opts?.dateFrom) result = result.filter(p => p.date >= opts.dateFrom!);
   if (opts?.dateTo) result = result.filter(p => p.date <= opts.dateTo!);
   if (opts?.supplier_id) result = result.filter(p => p.supplier_id === opts.supplier_id);
