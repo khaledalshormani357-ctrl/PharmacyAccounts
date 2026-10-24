@@ -8,8 +8,8 @@ import { useTheme } from '@/contexts/ThemeContext';
 import { addUser, getUsers, updateUser, User, UserRole } from '@/services/database';
 import { useAlert } from '@/template';
 
-const ROLES: UserRole[] = ['ADMIN', 'PHARMACIST', 'CASHIER', 'STOREKEEPER', 'ACCOUNTANT'];
-const ROLE_LABEL: Record<UserRole, string> = { ADMIN: 'مدير', PHARMACIST: 'صيدلي', CASHIER: 'كاشير', STOREKEEPER: 'أمين مستودع', ACCOUNTANT: 'محاسب' };
+const ROLES: UserRole[] = ['ADMIN', 'MANAGER', 'PHARMACIST', 'CASHIER', 'STOREKEEPER', 'ACCOUNTANT'];
+const ROLE_LABEL: Record<UserRole, string> = { ADMIN: 'مدير النظام', MANAGER: 'مدير الصيدلية', PHARMACIST: 'صيدلي', CASHIER: 'كاشير', STOREKEEPER: 'أمين مستودع', ACCOUNTANT: 'محاسب' };
 
 export default function UsersScreen() {
   const { theme } = useTheme();
@@ -41,7 +41,7 @@ export default function UsersScreen() {
   return <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
     <View style={{ backgroundColor: '#0052CC', paddingTop: insets.top + 10, paddingBottom: 14, paddingHorizontal: 14 }}>
       <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-        <TouchableOpacity onPress={() => { reset(); setShowForm(true); }} style={{ backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 7 }}><Text style={{ color: '#FFFFFF', fontWeight: '700' }}>+ مستخدم</Text></TouchableOpacity>
+        <View style={{ flexDirection: 'row', gap: 6 }}><TouchableOpacity onPress={() => router.push('/employee-access' as any)} style={{ backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 7 }}><Text style={{ color: '#FFFFFF', fontWeight: '700', fontSize: 11 }}>الصلاحيات</Text></TouchableOpacity><TouchableOpacity onPress={() => { reset(); setShowForm(true); }} style={{ backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 7 }}><Text style={{ color: '#FFFFFF', fontWeight: '700', fontSize: 11 }}>+ موظف</Text></TouchableOpacity></View>
         <Text style={{ color: '#FFFFFF', fontWeight: '800', fontSize: 17 }}>إدارة المستخدمين</Text>
         <TouchableOpacity onPress={() => router.back()}><MaterialIcons name="arrow-forward" size={23} color="#FFFFFF" /></TouchableOpacity>
       </View>
