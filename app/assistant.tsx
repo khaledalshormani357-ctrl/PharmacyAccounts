@@ -14,6 +14,7 @@ import {
   getSetting, getToday,
 } from '@/services/database';
 import { formatCurrency, getToday as getTodayStr } from '@/constants/i18n';
+import * as SecureStore from 'expo-secure-store';
 
 interface Message {
   id: string;
@@ -24,6 +25,8 @@ interface Message {
 
 const QUICK_QUESTIONS = [
   'ما مبيعات اليوم؟',
+  'ما تنبيهات الصيدلي اليوم؟',
+  'راجع تداخل دوائي أو جرعة (اذكر اسم الدواء فقط)',
   'ما الأصناف القريبة من الانتهاء؟',
   'ما الأصناف التي تحتاج إعادة طلب؟',
   'ما الأصناف الراكدة؟',
@@ -32,6 +35,24 @@ const QUICK_QUESTIONS = [
   'ما أكثر الأصناف مبيعاً؟',
   'ما رصيد الصندوق؟',
 ];
+
+async function askGeminiQuestion(question: string, apiKey: string): Promise<string> {
+  const response = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=' + encodeURIComponent(apiKey), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      contents: [{ parts: [{ text:
+        'أنت مساعد معلوماتي للصيدلي باللغة العربية. أجب بوضوح وباختصار. في الأسئلة السريرية: لا تخترع جرعات أو مراجع، اطلب معلومات ناقصة عند الحاجة، ميّز بين الدليل والإرشاد العام، واذكر اسم مرجع إرشادي موثوق فقط إذا كنت واثقاً منه. لا تشخّص مريضاً ولا تستبدل قرار الصيدلي/الطبيب، ونبّه إلى مراجعة النشرة والمراجع السريرية الحديثة والتحقق من التداخلات والقصور الكلوي والحمل والحساسية. لا توجد بيانات مريض مرفقة. السؤال: ' + question
+      }] }],
+      generationConfig: { temperature: 0.2 },
+    }),
+  });
+  const body: any = await response.json();
+  if (!response.ok) throw new Error(body?.error?.message || 'تعذر الاتصال بخدمة Gemini');
+  const answer = body?.candidates?.[0]?.content?.parts?.map((part: any) => part.text || '').join('').trim();
+  if (!answer) throw new Error('لم تُرجع خدمة الذكاء إجابة');
+  return answer;
+}
 
 function answerLocally(question: string): string {
   const q = question.toLowerCase();
@@ -45,6 +66,18 @@ function answerLocally(question: string): string {
       `• آجل: ${formatCurrency(kpis.todayCreditSales)}\n` +
       `• الإجمالي: ${formatCurrency(kpis.todaySales)}\n` +
       `• الربح الإجمالي: ${formatCurrency(kpis.todayGrossProfit)}`;
+  }
+
+  if (q.includes('تنبيه') && (q.includes('صيدلي') || q.includes('سريري'))) {
+    const radar = getExpiryRadar();
+    const reorder = getReorderSuggestions();
+    const expired = radar.filter(item => item.group === 'expired');
+    const nearExpiry = radar.filter(item => item.group !== 'expired');
+    return 'تنبيهات الصيدلية اليوم:\\n' +
+      '• دفعات منتهية: ' + expired.length + (expired.length ? ' — ' + expired.slice(0, 4).map(item => item.product_name).join('، ') : '') + '\\n' +
+      '• دفعات قريبة الانتهاء: ' + nearExpiry.length + '\\n' +
+      '• أصناف تحتاج إعادة طلب: ' + reorder.length + '\\n\\n' +
+      'هذه تنبيهات مخزون وصلاحية وليست تنبيهات سريرية مرتبطة بمريض. لمراجعة جرعة أو تداخل دوائي، استخدم سؤالاً سريرياً مع ذكر الدواء والمعلومات الضرورية دون بيانات تعريفية للمريض.';
   }
 
   if (q.includes('انتهاء') || q.includes('منتهي') || q.includes('صلاحية')) {
@@ -134,17 +167,29 @@ export default function AssistantScreen() {
 
   const sendMessage = useCallback((text: string) => {
     if (!text.trim()) return;
+    const question = text.trim();
     const userMsg: Message = {
       id: Date.now().toString(),
       role: 'user',
-      text: text.trim(),
+      text: question,
       timestamp: new Date().toLocaleTimeString('ar-SA', { hour: '2-digit', minute: '2-digit' }),
     };
     setMessages(prev => [...prev, userMsg]);
     setInput('');
     setLoading(true);
-    setTimeout(() => {
-      const answer = answerLocally(text);
+    void (async () => {
+      let answer = answerLocally(question);
+      const q = question.toLowerCase();
+      const needsClinicalReview = /تداخل|جرعة|سريري|سريرية|حمل|رضاعة|كلوي|كبد|مضاد حيوي|علاج/.test(q);
+      if (answer.startsWith('لا أملك إجابة محددة') || needsClinicalReview) {
+        try {
+          const apiKey = await SecureStore.getItemAsync('gemini_api_key');
+          if (apiKey) answer = await askGeminiQuestion(question, apiKey);
+          else if (needsClinicalReview) answer = 'لإتاحة الإجابات السريرية المدعومة بالذكاء الاصطناعي، أضف مفتاح Gemini API من الإعدادات. لا تعتمد على إجابة آلية غير متصلة بمراجع حديثة لاتخاذ قرار علاجي.';
+        } catch (error: any) {
+          answer = 'تعذر الحصول على إجابة من خدمة الذكاء الاصطناعي: ' + (error?.message || 'تحقق من الإنترنت والمفتاح والحصة المتاحة.');
+        }
+      }
       setMessages(prev => [...prev, {
         id: Date.now().toString() + 'a',
         role: 'assistant',
@@ -153,7 +198,7 @@ export default function AssistantScreen() {
       }]);
       setLoading(false);
       setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 100);
-    }, 500);
+    })();
   }, []);
 
   return (
@@ -167,7 +212,7 @@ export default function AssistantScreen() {
             <Text style={{ fontSize: 17, fontWeight: '700', color: '#FFFFFF' }}>المساعد الذكي</Text>
             <Text style={{ fontSize: 10, color: 'rgba(255,255,255,0.7)' }}>يعمل على بيانات صيدليتك</Text>
           </View>
-          <View style={{ width: 34 }} />
+          <TouchableOpacity onPress={() => router.push('/purchase-ocr' as any)} style={{ width: 36, height: 36, borderRadius: 9, backgroundColor: 'rgba(255,255,255,0.15)', alignItems: 'center', justifyContent: 'center' }}><MaterialIcons name="document-scanner" size={21} color="#FFFFFF" /></TouchableOpacity>
         </View>
       </View>
 
