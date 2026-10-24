@@ -65,6 +65,7 @@ function AppShell() {
         <Stack.Screen name="add-sale" options={{ headerShown: false, presentation: 'modal' }} />
         <Stack.Screen name="add-expense" options={{ headerShown: false, presentation: 'modal' }} />
         <Stack.Screen name="add-purchase" options={{ headerShown: false, presentation: 'modal' }} />
+        <Stack.Screen name="purchase-ocr" options={{ headerShown: false }} />
         <Stack.Screen name="add-customer" options={{ headerShown: false, presentation: 'modal' }} />
         <Stack.Screen name="add-supplier" options={{ headerShown: false, presentation: 'modal' }} />
         <Stack.Screen name="customers" options={{ headerShown: false }} />
