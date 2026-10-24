@@ -33,7 +33,8 @@ export default function ShiftsScreen() {
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
   const handleOpenShift = () => {
-    const cash = parseFloat(openingCash) || 0;
+    const cash = openingCash.trim() === '' ? 0 : Number(openingCash);
+    if (!Number.isFinite(cash) || cash < 0) { showAlert('قيمة غير صحيحة', 'أدخل رصيد افتتاح رقميًا يساوي صفرًا أو أكثر.'); return; }
     openShift({ opening_cash: cash });
     setShowOpenModal(false); setOpeningCash('');
     load();
@@ -43,8 +44,9 @@ export default function ShiftsScreen() {
   const handleCloseShift = () => {
     if (!openShiftData) return;
     const cash = parseFloat(actualCash);
-    if (isNaN(cash)) { showAlert('تنبيه', 'أدخل الرصيد الفعلي'); return; }
-    closeShift(openShiftData.id, cash, closeReason);
+    if (!Number.isFinite(cash) || cash < 0) { showAlert('تنبيه', 'أدخل الرصيد الفعلي رقمًا صحيحًا يساوي صفرًا أو أكثر.'); return; }
+    if (!closeReason.trim()) { showAlert('سبب الإغلاق مطلوب', 'اكتب ملاحظة إغلاق الوردية، واذكر سبب أي فرق في الصندوق إن وجد.'); return; }
+    closeShift(openShiftData.id, cash, closeReason.trim());
     setShowCloseModal(false); setActualCash(''); setCloseReason('');
     load();
     showAlert('تم', 'تم إغلاق الوردية');
@@ -179,7 +181,7 @@ export default function ShiftsScreen() {
             <Text style={{ fontSize: 12, color: theme.colors.textSecondary, textAlign: 'right', marginBottom: 6 }}>الرصيد الفعلي في الصندوق</Text>
             <TextInput value={actualCash} onChangeText={setActualCash} keyboardType="numeric" placeholder="0.00" placeholderTextColor={theme.colors.textTertiary}
               style={{ height: 52, borderRadius: 10, borderWidth: 1.5, borderColor: '#FF5630', fontSize: 22, fontWeight: '700', textAlign: 'center', color: theme.colors.textPrimary, marginBottom: 10 }} />
-            <TextInput value={closeReason} onChangeText={setCloseReason} placeholder="سبب الفرق (إن وجد)" placeholderTextColor={theme.colors.textTertiary}
+            <TextInput value={closeReason} onChangeText={setCloseReason} placeholder="ملاحظة الإغلاق وسبب فرق الصندوق (إلزامي)" placeholderTextColor={theme.colors.textTertiary}
               style={{ height: 44, borderRadius: 8, borderWidth: 1, borderColor: theme.colors.border, paddingHorizontal: 12, fontSize: 13, textAlign: 'right', color: theme.colors.textPrimary, marginBottom: 16 }} />
             <View style={{ flexDirection: 'row', gap: 10 }}>
               <TouchableOpacity onPress={() => setShowCloseModal(false)} style={{ flex: 1, height: 48, backgroundColor: theme.colors.surfaceAlt, borderRadius: 10, alignItems: 'center', justifyContent: 'center' }}>
