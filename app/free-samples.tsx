@@ -43,7 +43,7 @@ export default function FreeSamplesScreen() {
     const parsedCost = Number(unitCost);
     if (!Number.isFinite(parsedQuantity) || parsedQuantity <= 0) { showAlert('كمية غير صحيحة', 'أدخل كمية أكبر من صفر.'); return; }
     if (!Number.isFinite(parsedCost) || parsedCost < 0) { showAlert('تكلفة غير صحيحة', 'أدخل تكلفة تقديرية تساوي صفرًا أو أكثر.'); return; }
-    if (expiryDate.trim() && !/^\\d{4}-\\d{2}-\\d{2}$/.test(expiryDate.trim())) { showAlert('تاريخ غير صحيح', 'أدخل تاريخ الانتهاء بصيغة YYYY-MM-DD أو اتركه فارغًا.'); return; }
+    if (expiryDate.trim() && !/^\d{4}-\d{2}-\d{2}$/.test(expiryDate.trim())) { showAlert('تاريخ غير صحيح', 'أدخل تاريخ الانتهاء بصيغة YYYY-MM-DD أو اتركه فارغًا.'); return; }
     saveInProgress.current = true;
     setSaving(true);
     try {
