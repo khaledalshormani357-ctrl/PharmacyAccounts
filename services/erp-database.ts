@@ -1858,7 +1858,7 @@ export function createSaleReturn(data: NewSaleReturn): ReturnResult<SaleReturn> 
     const allocations: ReturnBatchAllocation[] = [];
     for (const source of sourceAllocations) {
       const alreadyReturned = store.saleReturns.flatMap(entry => entry.items)
-        .filter(line => line.sale_item_id === item.id)
+        .filter(line => line.sale_item_id === item.id && store.saleReturns.some(entry => entry.id === line.return_id && entry.status !== 'CANCELLED'))
         .flatMap(line => line.batch_allocations)
         .filter(allocation => allocation.batch_id === source.batch_id)
         .reduce((sum, allocation) => sum + allocation.quantity, 0);
