@@ -140,6 +140,10 @@ export default function InventoryScreen() {
           <MaterialIcons name="fact-check" size={18} color={theme.colors.primary} />
           <Text style={{ color: theme.colors.text, fontSize: 12, fontWeight: '600' }}>الجرد والتسويات</Text>
         </TouchableOpacity>
+        <TouchableOpacity onPress={() => router.push('/opening-stock')} style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, paddingVertical: 10, borderRadius: 10, backgroundColor: theme.colors.surface, borderWidth: 1, borderColor: theme.colors.border }}>
+          <MaterialIcons name="inventory" size={18} color={theme.colors.primary} />
+          <Text style={{ color: theme.colors.text, fontSize: 12, fontWeight: '600' }}>رصيد افتتاحي</Text>
+        </TouchableOpacity>
       </View>
 
       {/* Filter chips */}
@@ -153,7 +157,7 @@ export default function InventoryScreen() {
             >
               <Text style={{ fontSize: 12, fontWeight: '500', color: filter === f.key ? '#FFFFFF' : theme.colors.textSecondary }}>{f.label}</Text>
               <Text style={{ fontSize: 11, color: filter === f.key ? 'rgba(255,255,255,0.8)' : theme.colors.textTertiary }}>
-                ({items.filter(i => f.key === 'all' || i.status === f.key).length})
+                ({allItems.filter(i => f.key === 'all' || i.status === f.key).length})
               </Text>
             </TouchableOpacity>
           ))}
