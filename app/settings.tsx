@@ -199,8 +199,9 @@ export default function SettingsScreen() {
             { label: 'سجل التدقيق', icon: 'history', route: '/audit-log', color: '#172B4D' },
             { label: 'المستخدمون والصلاحيات', icon: 'manage-accounts', route: '/users', color: '#0052CC' },
             { label: 'فحص البيانات والنقل المحلي', icon: 'build-circle', route: '/system-tools', color: '#6554C0' },
+            { label: 'النقل المباشر عبر Wi-Fi', icon: 'swap-horiz', route: '/local-transfer', color: '#00875A' },
           ].map((item, i) => (
-            <TouchableOpacity key={item.label} onPress={() => router.push(item.route as any)} style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 14, borderBottomWidth: i < 3 ? 1 : 0, borderBottomColor: theme.colors.divider }}>
+            <TouchableOpacity key={item.label} onPress={() => router.push(item.route as any)} style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 14, borderBottomWidth: i < 4 ? 1 : 0, borderBottomColor: theme.colors.divider }}>
               <MaterialIcons name="chevron-left" size={18} color={theme.colors.textTertiary} />
               <Text style={{ flex: 1, fontSize: 14, color: theme.colors.textPrimary, textAlign: 'right', marginHorizontal: 10 }}>{item.label}</Text>
               <View style={{ width: 34, height: 34, borderRadius: 8, backgroundColor: item.color + '18', alignItems: 'center', justifyContent: 'center' }}>
