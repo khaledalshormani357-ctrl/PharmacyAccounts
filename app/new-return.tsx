@@ -5,7 +5,7 @@ import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '@/contexts/ThemeContext';
 import {
-  createPurchaseReturn, createSaleReturn, getCustomer, getProduct, getPurchase,
+  createPurchaseReturn, createSaleReturn, createDirectPurchaseReturn, createDirectSaleReturn, getProducts, getBatches, getCustomers, getSuppliers, getCustomer, getProduct, getPurchase,
   getPurchaseItemReturnableQuantity, getPurchaseItemReturnedQuantity, getPurchaseItems, getPurchases,
   getSale, getSaleItemReturnableQuantity, getSaleItemReturnedQuantity, getSaleItems, getSales,
   getSupplier, Purchase, PurchaseItem, Sale, SaleItem, ReturnSettlementMethod, flushDatabaseWrites,
@@ -60,6 +60,12 @@ export default function NewReturnScreen() {
   const initialInvoiceId = Array.isArray(params.invoiceId) ? params.invoiceId[0] : params.invoiceId;
   const initialInvoice = initialInvoiceId ? (kind === 'sale' ? getSale(Number(initialInvoiceId)) : getPurchase(Number(initialInvoiceId))) : null;
   const [search, setSearch] = useState('');
+  const [directMode, setDirectMode] = useState(false);
+  const [directProductId, setDirectProductId] = useState<number | null>(null);
+  const [directBatchId, setDirectBatchId] = useState<number | null>(null);
+  const [directQty, setDirectQty] = useState('');
+  const [directPrice, setDirectPrice] = useState('');
+  const [directPartyId, setDirectPartyId] = useState<number | null>(null);
   const [selectedId, setSelectedId] = useState<number | null>(initialInvoiceId ? Number(initialInvoiceId) : null);
   const [quantities, setQuantities] = useState<Record<number, string>>({});
   const [settlement, setSettlement] = useState<ReturnSettlementMethod>(() => kind === 'sale'
@@ -119,6 +125,22 @@ export default function NewReturnScreen() {
   };
 
   const submit = async () => {
+    if (directMode) {
+      if (!directProductId || !directBatchId) { showAlert('اختر الصنف والدفعة', 'حدد صنفًا ودفعة مخزنية أولًا.'); return; }
+      const quantity = Number(directQty), unitPrice = Number(directPrice);
+      if (!Number.isFinite(quantity) || quantity <= 0 || !Number.isFinite(unitPrice) || unitPrice < 0) { showAlert('بيانات غير صحيحة', 'أدخل كمية موجبة وسعرًا صحيحًا.'); return; }
+      setSaving(true);
+      try {
+        const result = kind === 'sale'
+          ? createDirectSaleReturn({ items: [{ product_id: directProductId, batch_id: directBatchId, quantity, unit_price: unitPrice }], customer_id: directPartyId, settlement_method: settlement as any, condition, notes, idempotency_key: `${operationKey}-direct-sale` })
+          : createDirectPurchaseReturn({ items: [{ product_id: directProductId, batch_id: directBatchId, quantity, unit_price: unitPrice }], supplier_id: directPartyId, settlement_method: settlement as any, notes, idempotency_key: `${operationKey}-direct-purchase` });
+        if (!result.success) { showAlert('تعذر تسجيل المرتجع', result.error); return; }
+        await flushDatabaseWrites();
+        router.replace({ pathname: '/return-detail', params: { type: kind, returnId: String(result.record.id) } } as any);
+      } catch { showAlert('تعذر الحفظ', 'تحقق من سجل المرتجعات قبل إعادة المحاولة.'); }
+      finally { setSaving(false); }
+      return;
+    }
     if (!selectedInvoice) { showAlert('اختر الفاتورة', 'حدد الفاتورة الأصلية أولًا.'); return; }
     const chosen = sourceItems.map(item => ({ item, quantity: Number(quantities[item.id] || 0) })).filter(row => row.quantity > 0);
     if (!chosen.length) { showAlert('لا توجد كميات', 'أدخل كمية موجبة لصنف واحد على الأقل.'); return; }
@@ -159,7 +181,23 @@ export default function NewReturnScreen() {
   return (
     <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
       {Header}
-      {!selectedInvoice ? <>
+      {directMode && !selectedInvoice ? <ScrollView contentContainerStyle={{ padding: 14, paddingBottom: 28 }}>
+        <TouchableOpacity onPress={() => { setDirectMode(false); setDirectProductId(null); setDirectBatchId(null); }} style={{ padding: 11, borderRadius: 9, backgroundColor: theme.colors.surfaceAlt, marginBottom: 12 }}><Text style={{ color: theme.colors.primary, textAlign: 'center', fontWeight: '800' }}>العودة لاختيار فاتورة أصلية</Text></TouchableOpacity>
+        <Text style={{ textAlign: 'right', color: theme.colors.textPrimary, fontWeight: '800', marginBottom: 8 }}>مرتجع مباشر — بدون فاتورة أصلية</Text>
+        <TextInput value={search} onChangeText={setSearch} placeholder="ابحث عن الصنف بالاسم" placeholderTextColor={theme.colors.textTertiary} style={{ padding: 12, textAlign: 'right', color: theme.colors.textPrimary, backgroundColor: theme.colors.surface, borderRadius: 9, marginBottom: 8 }} />
+        {getProducts({ search, activeOnly: true }).slice(0, 30).map(p => <TouchableOpacity key={p.id} onPress={() => { setDirectProductId(p.id); setDirectBatchId(null); setDirectPrice(String(kind === 'sale' ? p.selling_price : p.default_purchase_price)); }} style={{ padding: 11, borderBottomWidth: 1, borderColor: theme.colors.divider, backgroundColor: directProductId === p.id ? theme.colors.surfaceAlt : theme.colors.surface }}><Text style={{ color: theme.colors.textPrimary, textAlign: 'right', fontWeight: '700' }}>{p.trade_name} · {p.inventory_unit}</Text></TouchableOpacity>)}
+        {directProductId && <><Text style={{ textAlign: 'right', color: theme.colors.textPrimary, fontWeight: '800', marginTop: 12, marginBottom: 6 }}>اختر الدفعة (مرتبة حسب الأقرب انتهاءً)</Text>
+          {getBatches(directProductId, true).map(b => <TouchableOpacity key={b.id} onPress={() => setDirectBatchId(b.id)} style={{ padding: 10, backgroundColor: directBatchId === b.id ? theme.colors.surfaceAlt : theme.colors.surface, borderBottomWidth: 1, borderColor: theme.colors.divider }}><Text style={{ textAlign: 'right', color: theme.colors.textPrimary }}>{b.batch_number || 'بدون رقم'} · المتاح {b.quantity} · انتهاء {b.expiry_date || 'غير محدد'}{b.supplier_id ? ` · مورد #${b.supplier_id}` : ''}</Text></TouchableOpacity>)}
+          <View style={{ flexDirection: 'row', gap: 8, marginTop: 10 }}><TextInput value={directQty} onChangeText={setDirectQty} keyboardType="decimal-pad" placeholder="الكمية بوحدة المخزون" placeholderTextColor={theme.colors.textTertiary} style={{ flex: 1, padding: 10, textAlign: 'center', color: theme.colors.textPrimary, backgroundColor: theme.colors.surface, borderRadius: 8 }} /><TextInput value={directPrice} onChangeText={setDirectPrice} keyboardType="decimal-pad" placeholder="سعر الوحدة" placeholderTextColor={theme.colors.textTertiary} style={{ flex: 1, padding: 10, textAlign: 'center', color: theme.colors.textPrimary, backgroundColor: theme.colors.surface, borderRadius: 8 }} /></View>
+        </>}
+        <Text style={{ textAlign: 'right', color: theme.colors.textPrimary, fontWeight: '800', marginTop: 14, marginBottom: 6 }}>{kind === 'sale' ? 'العميل (اختياري للرد النقدي)' : 'المورد'}</Text>
+        {(kind === 'sale' ? getCustomers() : getSuppliers()).slice(0, 80).map((p: any) => <TouchableOpacity key={p.id} onPress={() => { setDirectPartyId(p.id); if (settlement === 'CASH_REFUND') setSettlement(kind === 'sale' ? 'CUSTOMER_BALANCE' : 'SUPPLIER_BALANCE'); }} style={{ padding: 9, backgroundColor: directPartyId === p.id ? theme.colors.surfaceAlt : theme.colors.surface }}><Text style={{ textAlign: 'right', color: theme.colors.textPrimary }}>{p.name}</Text></TouchableOpacity>)}
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 7, justifyContent: 'flex-end', marginTop: 10 }}>{settlementOptions.map(option => <TouchableOpacity key={option.value} onPress={() => setSettlement(option.value)} style={{ padding: 9, borderRadius: 16, backgroundColor: settlement === option.value ? accent : theme.colors.surfaceAlt }}><Text style={{ color: settlement === option.value ? '#FFFFFF' : theme.colors.textSecondary, fontSize: 11 }}>{option.label}</Text></TouchableOpacity>)}</View>
+        {kind === 'sale' && <View style={{ flexDirection: 'row', justifyContent: 'flex-end', gap: 8, marginTop: 10 }}>{[{value:'SELLABLE',label:'سليم يعود للمخزون'},{value:'DAMAGED',label:'تالف / محجور'}].map(o=><TouchableOpacity key={o.value} onPress={()=>setCondition(o.value as any)} style={{padding:9,borderRadius:12,backgroundColor:condition===o.value?accent:theme.colors.surfaceAlt}}><Text style={{color:condition===o.value?'#fff':theme.colors.textSecondary}}>{o.label}</Text></TouchableOpacity>)}</View>}
+        <TextInput value={notes} onChangeText={setNotes} placeholder="ملاحظات" placeholderTextColor={theme.colors.textTertiary} style={{ padding: 10, textAlign: 'right', color: theme.colors.textPrimary, marginTop: 10, backgroundColor: theme.colors.surface, borderRadius: 8 }} />
+        <TouchableOpacity disabled={saving} onPress={submit} style={{ padding: 15, marginTop: 14, borderRadius: 10, backgroundColor: accent, opacity: saving ? .5 : 1 }}><Text style={{ textAlign: 'center', color: '#fff', fontWeight: '900' }}>{saving ? 'جارٍ التسجيل…' : 'تأكيد المرتجع المباشر'}</Text></TouchableOpacity>
+      </ScrollView> : !selectedInvoice ? <>
+        <TouchableOpacity onPress={() => { setDirectMode(true); setSearch(''); setSelectedId(null); setQuantities({}); }} style={{ marginHorizontal: 14, marginTop: 10, padding: 11, borderRadius: 9, backgroundColor: theme.colors.primary }}><Text style={{ color: '#FFFFFF', textAlign: 'center', fontWeight: '800' }}>إنشاء مرتجع مباشر بدون فاتورة</Text></TouchableOpacity>
         <View style={{ margin: 14, flexDirection: 'row', alignItems: 'center', borderRadius: 10, borderWidth: 1, borderColor: theme.colors.border, backgroundColor: theme.colors.surface, paddingHorizontal: 10 }}>
           <MaterialIcons name="search" size={20} color={theme.colors.textTertiary} />
           <TextInput value={search} onChangeText={setSearch} placeholder="رقم الفاتورة، الطرف، التاريخ، الهاتف، الدواء أو الباركود" placeholderTextColor={theme.colors.textTertiary} style={{ flex: 1, height: 46, paddingHorizontal: 8, color: theme.colors.textPrimary, textAlign: 'right', fontSize: 12 }} />
