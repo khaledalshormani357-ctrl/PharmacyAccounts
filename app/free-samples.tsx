@@ -38,11 +38,17 @@ export default function FreeSamplesScreen() {
     // A ref blocks rapid repeated taps before React has rendered the disabled state.
     if (saveInProgress.current) return;
     if (!product || !unit) { showAlert('تنبيه', 'اختر الصنف ووحدة الكمية أولاً'); return; }
+    if (supplierId === null) { showAlert('المورد مطلوب', 'اختر المورد الذي قدّم العينة أو الهدية حتى تُسجّل الحركة على المورد الصحيح.'); return; }
+    const parsedQuantity = Number(quantity);
+    const parsedCost = Number(unitCost);
+    if (!Number.isFinite(parsedQuantity) || parsedQuantity <= 0) { showAlert('كمية غير صحيحة', 'أدخل كمية أكبر من صفر.'); return; }
+    if (!Number.isFinite(parsedCost) || parsedCost < 0) { showAlert('تكلفة غير صحيحة', 'أدخل تكلفة تقديرية تساوي صفرًا أو أكثر.'); return; }
+    if (expiryDate.trim() && !/^\\d{4}-\\d{2}-\\d{2}$/.test(expiryDate.trim())) { showAlert('تاريخ غير صحيح', 'أدخل تاريخ الانتهاء بصيغة YYYY-MM-DD أو اتركه فارغًا.'); return; }
     saveInProgress.current = true;
     setSaving(true);
     try {
       const result = createFreeSampleReceipt({
-        product_id: product.id, unit, quantity: Number(quantity), unit_cost: Number(unitCost),
+        product_id: product.id, unit, quantity: parsedQuantity, unit_cost: parsedCost,
         batch_number: batchNumber, expiry_date: expiryDate, supplier_id: supplierId, reason,
       });
       if (!result.success) { showAlert('تعذر حفظ العينة', result.error); return; }
