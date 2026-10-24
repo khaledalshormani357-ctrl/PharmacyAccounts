@@ -2279,6 +2279,51 @@ export function createPurchase(data: NewPurchase): PurchaseResult {
   }
 }
 
+/** Safely cancel a purchase invoice, reversing stock and accounting only when its lot quantities remain available. */
+export function cancelPurchaseInvoice(id: number, reason: string, user_id?: number | null): { success: boolean; error?: string } {
+  const purchase = store.purchases.find(p => p.id === id);
+  if (!purchase) return { success: false, error: 'فاتورة المشتريات غير موجودة' };
+  if (purchase.cancelled) return { success: false, error: 'الفاتورة ملغاة بالفعل' };
+  if (!reason.trim()) return { success: false, error: 'سبب الإلغاء مطلوب' };
+  const items = store.purchaseItems.filter(item => item.purchase_id === id);
+  if (!items.length) return { success: false, error: 'لا توجد بنود مرتبطة بالفاتورة' };
+  const activeReturns = store.purchaseReturns.filter(ret => ret.purchase_id === id && ret.status !== 'CANCELLED');
+  if (activeReturns.length) return { success: false, error: 'لا يمكن إلغاء الفاتورة لوجود مرتجعات مشتريات مرحّلة؛ ألغِ المرتجعات أولًا' };
+  for (const item of items) {
+    const batch = item.batch_id ? getBatch(item.batch_id) : null;
+    if (!batch) return { success: false, error: `دفعة الصنف ${item.product_name} غير موجودة؛ أوقف الإلغاء للمراجعة اليدوية` };
+    if (batch.quantity + 1e-8 < item.quantity_in_inventory_unit) return { success: false, error: `لا يمكن إلغاء الفاتورة بأمان: رصيد دفعة ${item.product_name} أقل من كمية الفاتورة، ربما استُهلك جزء منها` };
+  }
+  try {
+    return commitReturnAtomically(() => {
+      for (const item of items) {
+        const batch = getBatch(item.batch_id!);
+        if (!batch) throw new Error('دفعة غير موجودة أثناء الإلغاء');
+        batch.quantity = Math.max(0, batch.quantity - item.quantity_in_inventory_unit);
+        if (batch.quantity <= 1e-8 && batch.status !== 'RECALLED') batch.status = 'DEPLETED';
+        store.stockMovements.push({ id: ids.stockMovements++, product_id: item.product_id, batch_id: batch.id, type: 'ADJUSTMENT_OUT',
+          quantity: -item.quantity_in_inventory_unit, unit: item.unit, quantity_in_inventory_unit: -item.quantity_in_inventory_unit,
+          reference_type: 'purchase_cancel', reference_id: id, note: 'إلغاء فاتورة شراء: ' + reason.trim(), user_id: user_id ?? null, created_at: now() });
+      }
+      if (purchase.supplier_id && purchase.remaining > 0) {
+        const supplier = store.suppliers.find(s => s.id === purchase.supplier_id);
+        if (supplier) {
+          supplier.balance = Math.max(0, supplier.balance - purchase.remaining);
+          store.supplierTransactions.push({ id: ids.supplierTx++, supplier_id: supplier.id, type: 'adjustment',
+            amount: -purchase.remaining, balance_after: supplier.balance, reference_id: id, note: 'إلغاء فاتورة شراء ' + purchase.invoice_number + ': ' + reason.trim(), date: today(), created_at: now() });
+        }
+      }
+      if (purchase.amount_paid > 0) store.cashTransactions.push({ id: ids.cashTx++, type: 'ADJUSTMENT', amount: purchase.amount_paid,
+        reference_type: 'purchase_cancel', reference_id: id, shift_id: null, cashbox_id: 'daily',
+        note: 'عكس دفعة فاتورة ملغاة ' + purchase.invoice_number + ': ' + reason.trim(), user_id: user_id ?? null, date: today(), created_at: now() });
+      purchase.cancelled = true; purchase.cancelled_by = user_id ?? null; purchase.cancelled_at = now(); purchase.cancel_reason = reason.trim();
+      addAuditLog({ action: 'PURCHASE_CANCEL', entity: 'purchase', entity_id: id, user_id: user_id ?? undefined,
+        after_data: JSON.stringify({ reason: reason.trim(), total: purchase.total, amount_paid: purchase.amount_paid }) });
+      return { success: true };
+    });
+  } catch (e: any) { return { success: false, error: e?.message || 'تعذر إلغاء فاتورة المشتريات' }; }
+}
+
 export function getPurchases(opts?: {
   dateFrom?: string; dateTo?: string; supplier_id?: number; limit?: number;
 }): Purchase[] {
