@@ -9,6 +9,7 @@ import { getSetting, setSetting, getOpeningBalance, addOpeningBalance, flushData
 import { useAlert } from '@/template';
 import { PinSetup } from '@/components/ui';
 import * as ImagePicker from 'expo-image-picker';
+import * as SecureStore from 'expo-secure-store';
 
 export default function SettingsScreen() {
   const { theme, mode, toggleTheme } = useTheme();
@@ -29,6 +30,7 @@ export default function SettingsScreen() {
   const [saved, setSaved] = useState(false);
   const [openingBalance, setOpeningBalance] = useState('');
   const [openingBalanceTotal, setOpeningBalanceTotal] = useState(0);
+  const [geminiApiKey, setGeminiApiKey] = useState('');
 
   useEffect(() => {
     setPharmacyName(getSetting('pharmacy_name') || '');
@@ -40,6 +42,7 @@ export default function SettingsScreen() {
     setCurrencySymbol(getSetting('currency_symbol') || 'ر.ي');
     setPinEnabled(getSetting('pin_enabled') === 'true');
     setOpeningBalanceTotal(getOpeningBalance());
+    SecureStore.getItemAsync('gemini_api_key').then(value => setGeminiApiKey(value || '')).catch(() => undefined);
   }, []);
 
   const handleSave = async () => {
@@ -51,6 +54,8 @@ export default function SettingsScreen() {
     setSetting('currency', currency.trim());
     setSetting('currency_symbol', currencySymbol.trim());
     try {
+      if (geminiApiKey.trim()) await SecureStore.setItemAsync('gemini_api_key', geminiApiKey.trim());
+      else await SecureStore.deleteItemAsync('gemini_api_key');
       await flushDatabaseWrites();
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
@@ -203,6 +208,13 @@ export default function SettingsScreen() {
               </View>
             </TouchableOpacity>
           ))}
+        </View>
+
+        <Text style={{ fontSize: 13, fontWeight: '700', color: theme.colors.textPrimary, textAlign: 'right', marginBottom: 12, borderRightWidth: 3, borderRightColor: theme.colors.primary, paddingRight: 8 }}>المساعد الذكي وقراءة الفواتير</Text>
+        <View style={{ backgroundColor: theme.colors.surface, borderRadius: 12, borderWidth: 1, borderColor: theme.colors.border, padding: 14, marginBottom: 14 }}>
+          <Text style={labelStyle}>مفتاح Gemini API (اختياري)</Text>
+          <TextInput style={[inputStyle, { marginBottom: 8 }]} value={geminiApiKey} onChangeText={setGeminiApiKey} placeholder="أدخل مفتاح API لتفعيل OCR" placeholderTextColor={theme.colors.textTertiary} autoCapitalize="none" autoCorrect={false} secureTextEntry />
+          <Text style={{ color: theme.colors.textTertiary, fontSize: 11, textAlign: 'right', lineHeight: 17 }}>يُحفظ في التخزين الآمن للجهاز ولا يدخل في النسخ الاحتياطية. استخدام Gemini يتطلب اتصال إنترنت وحصة API متاحة؛ قيّد المفتاح في Google AI Studio ولا تضع مفتاحاً حساساً مشتركاً على أجهزة متعددة.</Text>
         </View>
 
         {/* App Info */}
