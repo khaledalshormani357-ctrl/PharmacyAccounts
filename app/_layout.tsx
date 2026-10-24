@@ -86,6 +86,7 @@ function AppShell() {
         <Stack.Screen name="users" options={{ headerShown: false }} />
         <Stack.Screen name="employee-access" options={{ headerShown: false }} />
         <Stack.Screen name="system-tools" options={{ headerShown: false }} />
+        <Stack.Screen name="local-transfer" options={{ headerShown: false }} />
         <Stack.Screen name="sale-detail" options={{ headerShown: false }} />
         <Stack.Screen name="purchase-detail" options={{ headerShown: false }} />
         <Stack.Screen name="returns" options={{ headerShown: false }} />
