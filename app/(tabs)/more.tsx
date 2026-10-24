@@ -92,7 +92,9 @@ export default function MoreScreen() {
         </Section>
 
         <Section title="النظام">
-          <MenuItem icon="manage-accounts" label="المستخدمون" color="#0052CC" onPress={() => router.push('/users' as any)} />
+          <MenuItem icon="manage-accounts" label="الموظفون والصلاحيات" sublabel="إدارة الأدوار ومصفوفة الصلاحيات وحزمة الموظف" color="#0052CC" onPress={() => router.push('/users' as any)} />
+          <MenuItem icon="build-circle" label="فحص البيانات والنقل المحلي" sublabel="تشخيص قاعدة البيانات وإصلاح آمن" color="#6554C0" onPress={() => router.push('/system-tools' as any)} />
+          <MenuItem icon="swap-horiz" label="النقل المباشر بين هاتفين" sublabel="نقل نسخة مشفرة عبر شبكة Wi-Fi محلية" color="#00875A" onPress={() => router.push('/local-transfer' as any)} />
           <MenuItem icon="history" label="سجل التدقيق" color="#5E6C84" onPress={() => router.push('/audit-log')} />
           <MenuItem icon="backup" label="النسخ الاحتياطي" color="#00875A" onPress={() => router.push('/backup')} />
           <MenuItem icon="settings" label="الإعدادات" onPress={() => router.push('/settings')} />
