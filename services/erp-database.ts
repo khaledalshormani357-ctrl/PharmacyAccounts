@@ -3282,8 +3282,6 @@ export function inspectAndRepairDatabase(repair = false): DatabaseIntegrityRepor
   const duplicateBatchIds = new Set<number>();
   const missingProductBatches = store.batches.filter(batch => !productIds.has(batch.product_id));
   const invalidBatchQuantities = store.batches.filter(batch => !Number.isFinite(batch.quantity) || batch.quantity < 0);
-  const zeroQuantityBatches = store.batches.filter(batch => Number.isFinite(batch.quantity) && batch.quantity <= 1e-8 && batch.status !== 'DEPLETED' && batch.status !== 'RECALLED');
-  const expiredStillActive = store.batches.filter(batch => batch.status === 'ACTIVE' && !!batch.expiry_date && batch.expiry_date <= today());
   const movementMissingBatch = store.stockMovements.filter(movement => !store.batches.some(batch => batch.id === movement.batch_id));
   const movementMissingProduct = store.stockMovements.filter(movement => !productIds.has(movement.product_id));
   const invalidUnits = store.productUnits.filter(unit => !productIds.has(unit.product_id) || !Number.isFinite(unit.conversion_factor) || unit.conversion_factor <= 0);
