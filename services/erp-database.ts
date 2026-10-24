@@ -278,7 +278,7 @@ export interface SaleReturn {
   settlement_method?: ReturnSettlementMethod;
   condition?: ReturnCondition;
   notes?: string | null;
-  status?: 'POSTED';
+  status?: 'POSTED' | 'CANCELLED';
   idempotency_key?: string | null;
   total: number;
   cash_refund: number;
@@ -1760,7 +1760,7 @@ export function getSaleItems(sale_id: number): SaleItem[] {
 
 export function getSaleItemReturnedQuantity(sale_item_id: number): number {
   return store.saleReturns.flatMap(entry => entry.items)
-    .filter(line => line.sale_item_id === sale_item_id)
+    .filter(line => line.sale_item_id === sale_item_id && store.saleReturns.some(entry => entry.id === line.return_id && entry.status !== 'CANCELLED'))
     .reduce((sum, line) => sum + line.quantity, 0);
 }
 
@@ -2185,7 +2185,7 @@ export function getPurchaseItemReturnableQuantity(purchase_item_id: number): num
 
 export function getPurchaseItemReturnedQuantity(purchase_item_id: number): number {
   return store.purchaseReturns.flatMap(entry => entry.items)
-    .filter(line => line.purchase_item_id === purchase_item_id)
+    .filter(line => line.purchase_item_id === purchase_item_id && store.purchaseReturns.some(entry => entry.id === line.return_id && entry.status !== 'CANCELLED'))
     .reduce((sum, line) => sum + line.quantity, 0);
 }
 
@@ -2199,6 +2199,88 @@ export function getAllPurchaseReturns(): PurchaseReturn[] {
 
 export function getPurchaseReturn(id: number): PurchaseReturn | null {
   return store.purchaseReturns.find(entry => entry.id === id) ?? null;
+}
+
+/** Cancel a posted sales return by reversing its exact inventory and settlement effects. */
+export function cancelSaleReturn(id: number, reason: string, user_id?: number | null): ReturnResult<SaleReturn> {
+  const record = store.saleReturns.find(entry => entry.id === id);
+  if (!record) return { success: false, error: 'مرتجع المبيعات غير موجود' };
+  if (record.status === 'CANCELLED') return { success: false, error: 'تم إلغاء هذا المرتجع سابقًا' };
+  if (!reason.trim()) return { success: false, error: 'أدخل سبب إلغاء المرتجع' };
+  try {
+    return commitReturnAtomically(() => {
+      for (const line of record.items) {
+        for (const allocation of line.batch_allocations ?? []) {
+          const batch = store.batches.find(entry => entry.id === allocation.batch_id);
+          if (!batch) throw new Error('دفعة المرتجع غير موجودة؛ أُلغي الإجراء دون تغيير');
+          if (record.condition === 'DAMAGED') batch.quarantined_quantity = Math.max(0, (batch.quarantined_quantity ?? 0) - allocation.quantity);
+          else {
+            if (batch.quantity + 1e-8 < allocation.quantity) throw new Error('لا يمكن عكس المرتجع: الكمية المسترجعة صُرفت لاحقًا من الدفعة');
+            batch.quantity -= allocation.quantity;
+          }
+          if (batch.status !== 'RECALLED') batch.status = batch.quantity <= 1e-8 ? 'DEPLETED' : (batch.expiry_date && batch.expiry_date <= today() ? 'EXPIRED' : 'ACTIVE');
+          store.stockMovements.push({ id: ids.stockMovements++, product_id: line.product_id, batch_id: batch.id,
+            type: 'ADJUSTMENT', quantity: -allocation.quantity, unit: getProduct(line.product_id)?.inventory_unit ?? 'قطعة',
+            quantity_in_inventory_unit: -allocation.quantity, reference_type: 'sale_return_cancel', reference_id: id,
+            note: 'عكس مرتجع مبيعات: ' + reason.trim(), user_id: user_id ?? null, created_at: now() });
+        }
+      }
+      const customer = record.customer_id ? store.customers.find(entry => entry.id === record.customer_id) : null;
+      if (customer && record.credit_reduction > 0) {
+        customer.balance += record.credit_reduction;
+        store.customerTransactions.push({ id: ids.customerTx++, customer_id: customer.id, type: 'adjustment',
+          amount: record.credit_reduction, balance_after: customer.balance, reference_id: id,
+          note: 'عكس مرتجع مبيعات ' + (record.return_number ?? id) + ': ' + reason.trim(), date: today(), created_at: now() });
+      }
+      if (record.cash_refund > 0) {
+        store.cashTransactions.push({ id: ids.cashTx++, type: 'ADJUSTMENT', amount: record.cash_refund,
+          reference_type: 'sale_return_cancel', reference_id: id, shift_id: null,
+          note: 'عكس رد نقدي لمرتجع ' + (record.return_number ?? id) + ': ' + reason.trim(), user_id: user_id ?? null, date: today(), created_at: now() });
+      }
+      record.status = 'CANCELLED';
+      addAuditLog({ action: 'SALE_RETURN_CANCEL', entity: 'sale_return', entity_id: id, user_id: user_id ?? undefined,
+        after_data: JSON.stringify({ reason: reason.trim(), return_number: record.return_number }) });
+      return { success: true, record };
+    });
+  } catch (error: any) { return { success: false, error: error?.message || 'تعذر إلغاء المرتجع؛ تم التراجع عن التغييرات' }; }
+}
+
+/** Cancel a posted purchase return and restore the original batch, supplier balance or cash. */
+export function cancelPurchaseReturn(id: number, reason: string, user_id?: number | null): ReturnResult<PurchaseReturn> {
+  const record = store.purchaseReturns.find(entry => entry.id === id);
+  if (!record) return { success: false, error: 'مرتجع المشتريات غير موجود' };
+  if (record.status === 'CANCELLED') return { success: false, error: 'تم إلغاء هذا المرتجع سابقًا' };
+  if (!reason.trim()) return { success: false, error: 'أدخل سبب إلغاء المرتجع' };
+  try {
+    return commitReturnAtomically(() => {
+      for (const line of record.items) {
+        const batch = store.batches.find(entry => entry.id === line.batch_id);
+        if (!batch) throw new Error('دفعة المرتجع غير موجودة؛ أُلغي الإجراء دون تغيير');
+        batch.quantity += line.quantity_in_inventory_unit;
+        if (batch.status !== 'RECALLED') batch.status = batch.expiry_date && batch.expiry_date <= today() ? 'EXPIRED' : 'ACTIVE';
+        store.stockMovements.push({ id: ids.stockMovements++, product_id: line.product_id, batch_id: batch.id,
+          type: 'ADJUSTMENT', quantity: line.quantity_in_inventory_unit, unit: getProduct(line.product_id)?.inventory_unit ?? 'قطعة',
+          quantity_in_inventory_unit: line.quantity_in_inventory_unit, reference_type: 'purchase_return_cancel', reference_id: id,
+          note: 'عكس مرتجع مشتريات: ' + reason.trim(), user_id: user_id ?? null, created_at: now() });
+      }
+      const supplier = record.supplier_id ? store.suppliers.find(entry => entry.id === record.supplier_id) : null;
+      if (supplier && record.payable_reduction > 0) {
+        supplier.balance += record.payable_reduction;
+        store.supplierTransactions.push({ id: ids.supplierTx++, supplier_id: supplier.id, type: 'adjustment',
+          amount: record.payable_reduction, balance_after: supplier.balance, reference_id: id,
+          note: 'عكس مرتجع مشتريات ' + (record.return_number ?? id) + ': ' + reason.trim(), date: today(), created_at: now() });
+      }
+      if (record.cash_refund > 0) {
+        store.cashTransactions.push({ id: ids.cashTx++, type: 'ADJUSTMENT', amount: -record.cash_refund,
+          reference_type: 'purchase_return_cancel', reference_id: id, shift_id: null,
+          note: 'عكس استرداد نقدي لمرتجع ' + (record.return_number ?? id) + ': ' + reason.trim(), user_id: user_id ?? null, date: today(), created_at: now() });
+      }
+      record.status = 'CANCELLED';
+      addAuditLog({ action: 'PURCHASE_RETURN_CANCEL', entity: 'purchase_return', entity_id: id, user_id: user_id ?? undefined,
+        after_data: JSON.stringify({ reason: reason.trim(), return_number: record.return_number }) });
+      return { success: true, record };
+    });
+  } catch (error: any) { return { success: false, error: error?.message || 'تعذر إلغاء المرتجع؛ تم التراجع عن التغييرات' }; }
 }
 
 export interface NewPurchaseReturn {
@@ -2813,8 +2895,8 @@ export function getOpenShift(): Shift | null {
 export function getReportSummary(dateFrom: string, dateTo: string): ReportSummary {
   const sales = getSales({ dateFrom, dateTo });
   const expenses = getExpenses({ dateFrom, dateTo });
-  const saleReturns = store.saleReturns.filter(entry => entry.date >= dateFrom && entry.date <= dateTo);
-  const purchaseReturns = store.purchaseReturns.filter(entry => entry.date >= dateFrom && entry.date <= dateTo);
+  const saleReturns = store.saleReturns.filter(entry => entry.status !== 'CANCELLED' && entry.date >= dateFrom && entry.date <= dateTo);
+  const purchaseReturns = store.purchaseReturns.filter(entry => entry.status !== 'CANCELLED' && entry.date >= dateFrom && entry.date <= dateTo);
 
   // Mixed invoices must contribute their actually paid portion to cash sales and
   // their outstanding portion to credit sales; excluding them understated revenue.
