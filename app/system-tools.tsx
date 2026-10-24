@@ -82,7 +82,7 @@ export default function SystemToolsScreen() {
         </View>
         <View style={card}>
           <Text style={{ color: colors.textPrimary, textAlign: 'right', fontWeight: '800', fontSize: 15 }}>النسخ والنقل بين الهواتف</Text>
-          <Text style={{ color: colors.textSecondary, textAlign: 'right', lineHeight: 21, marginTop: 6 }}>يمكنك إنشاء نسخة JSON ومشاركتها من قائمة أندرويد عبر Bluetooth أو WhatsApp أو Nearby Share، ثم استيرادها من شاشة النسخ الاحتياطي على الهاتف الآخر.</Text>
+          <Text style={{ color: colors.textSecondary, textAlign: 'right', lineHeight: 21, marginTop: 6 }}>يمكنك نقل النسخة مباشرة بين هاتفين على شبكة Wi-Fi نفسها من شاشة النقل المباشر، أو مشاركة ملف JSON عبر Bluetooth أو WhatsApp أو Nearby Share.</Text>
           <View style={{ flexDirection: 'row', justifyContent: 'flex-end', alignItems: 'center', marginTop: 10, gap: 8 }}>
             <Text style={{ color: colors.textSecondary, textAlign: 'right', flex: 1 }}>عنوان Wi-Fi لهذا الجهاز: {ipAddress || 'جارٍ الفحص…'}</Text>
             <MaterialIcons name="wifi" size={22} color={colors.primary} />
@@ -93,7 +93,7 @@ export default function SystemToolsScreen() {
           <TouchableOpacity onPress={() => router.push('/local-transfer' as any)} style={{ borderWidth: 1, borderColor: colors.primary, borderRadius: 9, padding: 13, alignItems: 'center', marginTop: 8 }}>
             <Text style={{ color: colors.primary, fontWeight: '800' }}>النقل المباشر بين هاتفين على Wi-Fi</Text>
           </TouchableOpacity>
-          <Text style={{ color: colors.textTertiary, textAlign: 'right', fontSize: 11, lineHeight: 17, marginTop: 8 }}>ملاحظة: هذا الإصدار يعرض عنوان الشبكة ويوفر نقل الملف عبر تطبيقات المشاركة؛ لم يتم إنشاء خادم استقبال مباشر على الشبكة المحلية بعد.</Text>
+          <Text style={{ color: colors.textTertiary, textAlign: 'right', fontSize: 11, lineHeight: 17, marginTop: 8 }}>النقل المباشر يستخدم تبادل QR لإنشاء اتصال WebRTC مشفر بين الهاتفين دون خادم أو خدمة سحابية. يجب أن يكون الهاتفان على الشبكة المحلية نفسها.</Text>
         </View>
         <View style={card}>
           <Text style={{ color: colors.textPrimary, textAlign: 'right', fontWeight: '800', fontSize: 15 }}>إعدادات الهوية والطباعة</Text>
