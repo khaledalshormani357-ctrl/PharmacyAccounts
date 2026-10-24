@@ -9,6 +9,7 @@ import { databaseReady, getSetting } from '@/services/database';
 import { PinLock } from '@/components/ui';
 import { CloudAuthGate } from '@/components/CloudAuthGate';
 import { AnimatedBrandSplash } from '@/components/AnimatedBrandSplash';
+import { AssistantFloatingButton } from '@/components/AssistantFloatingButton';
 import * as SplashScreen from 'expo-splash-screen';
 
 void SplashScreen.preventAutoHideAsync().catch(() => undefined);
@@ -82,6 +83,8 @@ function AppShell() {
         <Stack.Screen name="assistant" options={{ headerShown: false }} />
         <Stack.Screen name="settings" options={{ headerShown: false }} />
         <Stack.Screen name="users" options={{ headerShown: false }} />
+        <Stack.Screen name="employee-access" options={{ headerShown: false }} />
+        <Stack.Screen name="system-tools" options={{ headerShown: false }} />
         <Stack.Screen name="sale-detail" options={{ headerShown: false }} />
         <Stack.Screen name="purchase-detail" options={{ headerShown: false }} />
         <Stack.Screen name="returns" options={{ headerShown: false }} />
@@ -89,6 +92,7 @@ function AppShell() {
         <Stack.Screen name="return-detail" options={{ headerShown: false }} />
         </Stack>
       )}
+      <AssistantFloatingButton />
       {showBrandSplash && <AnimatedBrandSplash onFinish={hideBrandSplash} />}
     </>
   );
