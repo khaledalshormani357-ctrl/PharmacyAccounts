@@ -315,7 +315,7 @@ export interface PurchaseReturn {
   user_name?: string | null;
   settlement_method?: ReturnSettlementMethod;
   notes?: string | null;
-  status?: 'POSTED';
+  status?: 'POSTED' | 'CANCELLED';
   idempotency_key?: string | null;
   total: number;
   cash_refund: number;
@@ -2220,7 +2220,7 @@ export function cancelSaleReturn(id: number, reason: string, user_id?: number | 
           }
           if (batch.status !== 'RECALLED') batch.status = batch.quantity <= 1e-8 ? 'DEPLETED' : (batch.expiry_date && batch.expiry_date <= today() ? 'EXPIRED' : 'ACTIVE');
           store.stockMovements.push({ id: ids.stockMovements++, product_id: line.product_id, batch_id: batch.id,
-            type: 'ADJUSTMENT', quantity: -allocation.quantity, unit: getProduct(line.product_id)?.inventory_unit ?? 'قطعة',
+            type: 'ADJUSTMENT_OUT', quantity: -allocation.quantity, unit: getProduct(line.product_id)?.inventory_unit ?? 'قطعة',
             quantity_in_inventory_unit: -allocation.quantity, reference_type: 'sale_return_cancel', reference_id: id,
             note: 'عكس مرتجع مبيعات: ' + reason.trim(), user_id: user_id ?? null, created_at: now() });
         }
@@ -2259,7 +2259,7 @@ export function cancelPurchaseReturn(id: number, reason: string, user_id?: numbe
         batch.quantity += line.quantity_in_inventory_unit;
         if (batch.status !== 'RECALLED') batch.status = batch.expiry_date && batch.expiry_date <= today() ? 'EXPIRED' : 'ACTIVE';
         store.stockMovements.push({ id: ids.stockMovements++, product_id: line.product_id, batch_id: batch.id,
-          type: 'ADJUSTMENT', quantity: line.quantity_in_inventory_unit, unit: getProduct(line.product_id)?.inventory_unit ?? 'قطعة',
+          type: 'ADJUSTMENT_IN', quantity: line.quantity_in_inventory_unit, unit: getProduct(line.product_id)?.inventory_unit ?? 'قطعة',
           quantity_in_inventory_unit: line.quantity_in_inventory_unit, reference_type: 'purchase_return_cancel', reference_id: id,
           note: 'عكس مرتجع مشتريات: ' + reason.trim(), user_id: user_id ?? null, created_at: now() });
       }
