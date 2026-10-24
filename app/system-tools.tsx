@@ -90,6 +90,9 @@ export default function SystemToolsScreen() {
           <TouchableOpacity onPress={() => router.push('/backup')} style={{ backgroundColor: colors.primary, borderRadius: 9, padding: 13, alignItems: 'center', marginTop: 12 }}>
             <Text style={{ color: '#FFFFFF', fontWeight: '800' }}>فتح النسخ الاحتياطي والاستعادة</Text>
           </TouchableOpacity>
+          <TouchableOpacity onPress={() => router.push('/local-transfer' as any)} style={{ borderWidth: 1, borderColor: colors.primary, borderRadius: 9, padding: 13, alignItems: 'center', marginTop: 8 }}>
+            <Text style={{ color: colors.primary, fontWeight: '800' }}>النقل المباشر بين هاتفين على Wi-Fi</Text>
+          </TouchableOpacity>
           <Text style={{ color: colors.textTertiary, textAlign: 'right', fontSize: 11, lineHeight: 17, marginTop: 8 }}>ملاحظة: هذا الإصدار يعرض عنوان الشبكة ويوفر نقل الملف عبر تطبيقات المشاركة؛ لم يتم إنشاء خادم استقبال مباشر على الشبكة المحلية بعد.</Text>
         </View>
         <View style={card}>
