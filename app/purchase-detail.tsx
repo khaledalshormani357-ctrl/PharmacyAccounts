@@ -1,11 +1,11 @@
 // Smart Pharmacy ERP — Purchase Detail
 import React, { useState, useCallback } from 'react';
-import { View, Text, ScrollView, TouchableOpacity } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, TextInput } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams , useFocusEffect } from 'expo-router';
 import { useTheme } from '@/contexts/ThemeContext';
-import { getPurchase, getPurchaseItemReturnableQuantity, getPurchaseItemReturnedQuantity, getPurchaseItems, getPurchaseReturns, getSetting, Purchase, PurchaseItem, PurchaseReturn } from '@/services/database';
+import { getPurchase, cancelPurchaseInvoice, flushDatabaseWrites, getPurchaseItemReturnableQuantity, getPurchaseItemReturnedQuantity, getPurchaseItems, getPurchaseReturns, getSetting, Purchase, PurchaseItem, PurchaseReturn } from '@/services/database';
 import { formatCurrency, formatDate } from '@/constants/i18n';
 import { PdfActions } from '@/components/PdfActions';
 import { buildInvoiceHtml } from '@/services/pdfReport';
@@ -20,6 +20,9 @@ export default function PurchaseDetailScreen() {
   const [purchase, setPurchase] = useState<Purchase | null>(null);
   const [items, setItems] = useState<PurchaseItem[]>([]);
   const [returns, setReturns] = useState<PurchaseReturn[]>([]);
+  const [showCancelForm, setShowCancelForm] = useState(false);
+  const [cancelReason, setCancelReason] = useState('');
+  const [cancelling, setCancelling] = useState(false);
 
   const load = useCallback(() => {
     if (!id) return;
@@ -57,7 +60,7 @@ export default function PurchaseDetailScreen() {
       details: `مجاني: ${item.free_quantity} ${item.unit} · دفعة: ${item.batch_number} · انتهاء: ${item.expiry_date ? formatDate(item.expiry_date) : 'غير محدد'}`,
     })),
   });
-  const returnStatus = returns.length === 0 ? 'نشطة — بلا مرتجعات'
+  const returnStatus = purchase.cancelled ? 'ملغاة' : returns.length === 0 ? 'نشطة — بلا مرتجعات'
     : items.some(item => getPurchaseItemReturnableQuantity(item.id) > 0) ? 'مرتجعة جزئيًا'
       : 'مرتجعة بالكامل';
 
@@ -87,6 +90,19 @@ export default function PurchaseDetailScreen() {
       <View style={{ backgroundColor: theme.colors.warningLight, padding: 10, marginHorizontal: 14, marginTop: 12, borderRadius: 8 }}><Text style={{ color: theme.colors.warning, textAlign: 'right', fontSize: 12, fontWeight: '700' }}>حالة الفاتورة: {returnStatus}{returns.length ? ` · مرتجعات مسجلة: ${returns.length} — ${formatCurrency(returns.reduce((sum, entry) => sum + entry.total, 0))}` : ''}</Text></View>
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: 14, paddingBottom: 32 }}>
+        {purchase.cancelled && <View style={{ padding: 12, borderRadius: 9, backgroundColor: theme.colors.errorLight, marginBottom: 12 }}><Text style={{ color: theme.colors.error, textAlign: 'right', fontWeight: '800' }}>هذه الفاتورة ملغاة</Text><Text style={{ color: theme.colors.error, textAlign: 'right', marginTop: 4 }}>السبب: {purchase.cancel_reason || 'غير محدد'}</Text></View>}
+        {!purchase.cancelled && <View style={{ marginBottom: 12 }}>
+          {!showCancelForm ? <TouchableOpacity onPress={() => setShowCancelForm(true)} style={{ padding: 11, borderRadius: 9, borderWidth: 1, borderColor: theme.colors.error, alignItems: 'center' }}><Text style={{ color: theme.colors.error, fontWeight: '800' }}>إلغاء فاتورة المشتريات</Text></TouchableOpacity>
+          : <View style={{ padding: 12, borderRadius: 10, backgroundColor: theme.colors.surface, borderWidth: 1, borderColor: theme.colors.error }}>
+            <Text style={{ textAlign: 'right', color: theme.colors.error, fontWeight: '800', marginBottom: 6 }}>سبب الإلغاء (إلزامي)</Text>
+            <TextInput value={cancelReason} onChangeText={setCancelReason} placeholder="اكتب سبب إلغاء الفاتورة" placeholderTextColor={theme.colors.textTertiary} multiline style={{ minHeight: 64, padding: 10, textAlign: 'right', color: theme.colors.textPrimary, backgroundColor: theme.colors.surfaceAlt, borderRadius: 8 }} />
+            <Text style={{ textAlign: 'right', color: theme.colors.textSecondary, fontSize: 11, marginVertical: 8 }}>لن يسمح بالإلغاء إذا كانت الدفعات قد استُهلكت أو توجد مرتجعات مرحّلة، لحماية المخزون والحسابات.</Text>
+            <View style={{ flexDirection: 'row', gap: 8 }}>
+              <TouchableOpacity disabled={cancelling} onPress={() => { setShowCancelForm(false); setCancelReason(''); }} style={{ flex: 1, padding: 11, borderRadius: 8, backgroundColor: theme.colors.surfaceAlt }}><Text style={{ textAlign: 'center', color: theme.colors.textSecondary }}>تراجع</Text></TouchableOpacity>
+              <TouchableOpacity disabled={cancelling || !cancelReason.trim()} onPress={async () => { setCancelling(true); try { const result = cancelPurchaseInvoice(purchase.id, cancelReason); if (!result.success) { showAlert('تعذر الإلغاء', result.error || 'تعذر إلغاء الفاتورة'); return; } await flushDatabaseWrites(); setShowCancelForm(false); load(); showAlert('تم الإلغاء', 'أُلغيت الفاتورة وعُكست آثارها المخزنية والحسابية.'); } catch { showAlert('خطأ', 'تعذر تأكيد حفظ الإلغاء. تحقق من حالة الفاتورة قبل المحاولة مجددًا.'); } finally { setCancelling(false); } }} style={{ flex: 1, padding: 11, borderRadius: 8, backgroundColor: theme.colors.error, opacity: cancelling || !cancelReason.trim() ? .5 : 1 }}><Text style={{ textAlign: 'center', color: '#FFFFFF', fontWeight: '800' }}>{cancelling ? 'جارٍ الإلغاء…' : 'تأكيد الإلغاء'}</Text></TouchableOpacity>
+            </View>
+          </View>}
+        </View>}
         <View style={{ backgroundColor: theme.colors.surface, borderRadius: 12, borderWidth: 1, borderColor: theme.colors.border, overflow: 'hidden', marginBottom: 14 }}>
           <View style={{ padding: 12, borderBottomWidth: 1, borderBottomColor: theme.colors.border }}>
             <Text style={{ fontSize: 14, fontWeight: '700', color: theme.colors.textPrimary, textAlign: 'right' }}>الأصناف ({items.length})</Text>
