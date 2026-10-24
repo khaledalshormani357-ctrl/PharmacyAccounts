@@ -167,7 +167,7 @@ export default function AssistantScreen() {
             <Text style={{ fontSize: 17, fontWeight: '700', color: '#FFFFFF' }}>المساعد الذكي</Text>
             <Text style={{ fontSize: 10, color: 'rgba(255,255,255,0.7)' }}>يعمل على بيانات صيدليتك</Text>
           </View>
-          <View style={{ width: 34 }} />
+          <TouchableOpacity onPress={() => router.push('/purchase-ocr' as any)} style={{ width: 36, height: 36, borderRadius: 9, backgroundColor: 'rgba(255,255,255,0.15)', alignItems: 'center', justifyContent: 'center' }}><MaterialIcons name="document-scanner" size={21} color="#FFFFFF" /></TouchableOpacity>
         </View>
       </View>
 
