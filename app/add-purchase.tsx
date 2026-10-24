@@ -41,6 +41,7 @@ export default function AddPurchaseScreen() {
   const [items, setItems] = useState<PurchaseLineItem[]>([]);
   const [invoiceDiscount, setInvoiceDiscount] = useState('0');
   const [amountPaid, setAmountPaid] = useState('');
+  const [paymentMode, setPaymentMode] = useState<'CASH' | 'CREDIT' | 'PARTIAL'>('CREDIT');
   const [notes, setNotes] = useState('');
   const [saving, setSaving] = useState(false);
 
@@ -131,6 +132,12 @@ export default function AddPurchaseScreen() {
   const total = Math.max(0, subtotal - invoiceDiscountNum);
   const amountPaidNum = amountPaid.trim() === '' ? 0 : Number(amountPaid);
   const remaining = Math.max(0, total - amountPaidNum);
+  const setPurchasePaymentMode = (mode: 'CASH' | 'CREDIT' | 'PARTIAL') => {
+    setPaymentMode(mode);
+    if (mode === 'CASH') setAmountPaid(String(total));
+    else if (mode === 'CREDIT') setAmountPaid('0');
+    else if (amountPaidNum <= 0 || amountPaidNum >= total) setAmountPaid('');
+  };
 
   const addItem = (product: Product) => {
     setShowProductSearch(false);
@@ -347,7 +354,7 @@ export default function AddPurchaseScreen() {
             </TouchableOpacity>
             <TouchableOpacity onPress={() => router.push('/purchase-ocr' as any)} style={{ backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 8, paddingHorizontal: 7, paddingVertical: 6, flexDirection: 'row', alignItems: 'center', gap: 3 }}>
               <MaterialIcons name="document-scanner" size={15} color="#FFFFFF" />
-              <Text style={{ color: '#FFFFFF', fontSize: 10, fontWeight: '600' }}>OCR</Text>
+              <Text style={{ color: '#FFFFFF', fontSize: 10, fontWeight: '600' }}>استيراد ذكي OCR</Text>
             </TouchableOpacity>
             <TouchableOpacity onPress={() => { setShowProductSearch(true); setProductResults(getProducts({ activeOnly: true })); }} style={{ backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 6, flexDirection: 'row', alignItems: 'center', gap: 3 }}>
               <MaterialIcons name="add" size={15} color="#FFFFFF" />
@@ -449,10 +456,19 @@ export default function AddPurchaseScreen() {
                 <Text style={{ fontSize: 14, fontWeight: '700', color: theme.colors.textPrimary }}>الإجمالي</Text>
               </View>
               <View style={{ height: 1, backgroundColor: theme.colors.divider, marginVertical: 8 }} />
-              <Text style={{ fontSize: 12, color: theme.colors.textTertiary, textAlign: 'right', marginBottom: 6 }}>المبلغ المدفوع</Text>
-              <TextInput value={amountPaid} onChangeText={setAmountPaid} keyboardType="numeric" placeholder="0.00" placeholderTextColor={theme.colors.textTertiary}
+              <Text style={{ fontSize: 12, color: theme.colors.textTertiary, textAlign: 'right', marginBottom: 8 }}>طريقة الدفع</Text>
+              <View style={{ flexDirection: 'row', gap: 7, marginBottom: 10 }}>
+                {([{ value: 'CASH', label: 'نقدي' }, { value: 'CREDIT', label: 'آجل' }, { value: 'PARTIAL', label: 'دفعة جزئية' }] as const).map(option => (
+                  <TouchableOpacity key={option.value} onPress={() => setPurchasePaymentMode(option.value)} style={{ flex: 1, paddingVertical: 9, borderRadius: 8, backgroundColor: paymentMode === option.value ? '#6554C0' : theme.colors.surfaceAlt, borderWidth: 1, borderColor: paymentMode === option.value ? '#6554C0' : theme.colors.border }}>
+                    <Text style={{ textAlign: 'center', color: paymentMode === option.value ? '#FFFFFF' : theme.colors.textSecondary, fontWeight: '700', fontSize: 12 }}>{option.label}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+              <Text style={{ fontSize: 12, color: theme.colors.textTertiary, textAlign: 'right', marginBottom: 6 }}>{paymentMode === 'CASH' ? 'المبلغ النقدي المصروف من الصندوق' : paymentMode === 'CREDIT' ? 'فاتورة آجلة — لا يوجد دفع الآن' : 'مبلغ الدفعة الجزئية المصروفة'}</Text>
+              <TextInput value={amountPaid} onChangeText={v => { setAmountPaid(v); setPaymentMode((Number(v) <= 0 ? 'CREDIT' : Number(v) >= total ? 'CASH' : 'PARTIAL')); }} editable={paymentMode === 'PARTIAL'} keyboardType="numeric" placeholder="0.00" placeholderTextColor={theme.colors.textTertiary}
                 style={{ height: 46, borderRadius: 10, borderWidth: 1.5, borderColor: '#6554C0', paddingHorizontal: 12, fontSize: 16, fontWeight: '700', textAlign: 'center', color: theme.colors.textPrimary, marginBottom: 8 }}
               />
+              <Text style={{ fontSize: 11, color: theme.colors.textSecondary, textAlign: 'right', marginBottom: 8 }}>سيُسجل الصرف ضمن حركات صندوق النقدية، ويُحدّث رصيد المورد بالمبلغ الآجل.</Text>
               {remaining > 0 && (
                 <View style={{ backgroundColor: theme.colors.errorLight, borderRadius: 8, padding: 8, alignItems: 'center' }}>
                   <Text style={{ fontSize: 13, fontWeight: '700', color: theme.colors.error }}>متبقي للمورد: {formatCurrency(remaining, currencySymbol)}</Text>
