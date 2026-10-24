@@ -2318,19 +2318,25 @@ export function getCustomer(id: number): Customer | null {
 }
 
 export function addCustomer(data: {
-  name: string; phone?: string; address?: string; credit_limit?: number; notes?: string;
+  name: string; phone?: string; address?: string; credit_limit?: number; opening_balance?: number; notes?: string;
 }): Customer {
+  const openingBalance = Number(data.opening_balance ?? 0);
+  if (!Number.isFinite(openingBalance) || openingBalance < 0) throw new Error('الرصيد الافتتاحي غير صالح');
   const customer: Customer = {
     id: ids.customers++,
     name: data.name,
     phone: data.phone ?? null,
     address: data.address ?? null,
     credit_limit: data.credit_limit ?? 0,
-    balance: 0,
+    balance: openingBalance,
     notes: data.notes ?? null,
     created_at: now(),
   };
   store.customers.push(customer);
+  if (openingBalance > 0) {
+    store.customerTransactions.push({ id: ids.customerTx++, customer_id: customer.id, type: 'adjustment', amount: openingBalance, balance_after: openingBalance, reference_id: null, note: 'رصيد افتتاحي — دين سابق', date: today(), created_at: now() });
+    addAuditLog({ action: 'CUSTOMER_OPENING_BALANCE', entity: 'customer', entity_id: customer.id, after_data: JSON.stringify({ openingBalance }) });
+  }
   return customer;
 }
 
@@ -2343,9 +2349,10 @@ export function deleteCustomer(id: number): void {
   store.customers = store.customers.filter(c => c.id !== id);
 }
 
-export function recordCustomerPayment(customer_id: number, amount: number, note?: string): void {
+export function recordCustomerPayment(customer_id: number, amount: number, note?: string, cashbox_id: CashboxId = 'daily', payment_method = 'نقداً'): void {
+  if (!Number.isFinite(amount) || amount <= 0) throw new Error('مبلغ القبض غير صالح');
   const customer = store.customers.find(c => c.id === customer_id);
-  if (!customer) return;
+  if (!customer) throw new Error('العميل غير موجود');
   customer.balance -= amount;
   store.customerTransactions.push({
     id: ids.customerTx++,
@@ -2354,7 +2361,7 @@ export function recordCustomerPayment(customer_id: number, amount: number, note?
     amount: -amount,
     balance_after: customer.balance,
     reference_id: null,
-    note: note ?? 'سداد دين',
+    note: `${payment_method} — ${note ?? 'سداد دين'}`,
     date: today(),
     created_at: now(),
   });
@@ -2362,10 +2369,11 @@ export function recordCustomerPayment(customer_id: number, amount: number, note?
     id: ids.cashTx++,
     type: 'COLLECTION',
     amount,
+    cashbox_id,
     reference_type: 'customer_payment',
     reference_id: customer_id,
     shift_id: null,
-    note: `تحصيل من ${customer.name}`,
+    note: `تحصيل من ${customer.name} — ${payment_method}${note ? ` — ${note}` : ''}`,
     user_id: null,
     date: today(),
     created_at: now(),
@@ -2400,19 +2408,25 @@ export function getSupplier(id: number): Supplier | null {
 }
 
 export function addSupplier(data: {
-  name: string; phone?: string; address?: string; credit_limit?: number; notes?: string;
+  name: string; phone?: string; address?: string; credit_limit?: number; opening_balance?: number; notes?: string;
 }): Supplier {
+  const openingBalance = Number(data.opening_balance ?? 0);
+  if (!Number.isFinite(openingBalance) || openingBalance < 0) throw new Error('الرصيد الافتتاحي غير صالح');
   const supplier: Supplier = {
     id: ids.suppliers++,
     name: data.name,
     phone: data.phone ?? null,
     address: data.address ?? null,
     credit_limit: data.credit_limit ?? 0,
-    balance: 0,
+    balance: openingBalance,
     notes: data.notes ?? null,
     created_at: now(),
   };
   store.suppliers.push(supplier);
+  if (openingBalance > 0) {
+    store.supplierTransactions.push({ id: ids.supplierTx++, supplier_id: supplier.id, type: 'adjustment', amount: openingBalance, balance_after: openingBalance, reference_id: null, note: 'رصيد افتتاحي — دين سابق', date: today(), created_at: now() });
+    addAuditLog({ action: 'SUPPLIER_OPENING_BALANCE', entity: 'supplier', entity_id: supplier.id, after_data: JSON.stringify({ openingBalance }) });
+  }
   return supplier;
 }
 
@@ -2425,9 +2439,10 @@ export function deleteSupplier(id: number): void {
   store.suppliers = store.suppliers.filter(s => s.id !== id);
 }
 
-export function recordSupplierPayment(supplier_id: number, amount: number, note?: string): void {
+export function recordSupplierPayment(supplier_id: number, amount: number, note?: string, cashbox_id: CashboxId = 'daily', payment_method = 'نقداً'): void {
+  if (!Number.isFinite(amount) || amount <= 0) throw new Error('مبلغ الصرف غير صالح');
   const supplier = store.suppliers.find(s => s.id === supplier_id);
-  if (!supplier) return;
+  if (!supplier) throw new Error('المورد غير موجود');
   supplier.balance -= amount;
   store.supplierTransactions.push({
     id: ids.supplierTx++,
@@ -2436,7 +2451,7 @@ export function recordSupplierPayment(supplier_id: number, amount: number, note?
     amount: -amount,
     balance_after: supplier.balance,
     reference_id: null,
-    note: note ?? 'دفعة للمورد',
+    note: `${payment_method} — ${note ?? 'دفعة للمورد'}`,
     date: today(),
     created_at: now(),
   });
@@ -2444,10 +2459,11 @@ export function recordSupplierPayment(supplier_id: number, amount: number, note?
     id: ids.cashTx++,
     type: 'SUPPLIER_PAYMENT',
     amount: -amount,
+    cashbox_id,
     reference_type: 'supplier_payment',
     reference_id: supplier_id,
     shift_id: null,
-    note: `دفعة لـ ${supplier.name}`,
+    note: `دفعة لـ ${supplier.name} — ${payment_method}${note ? ` — ${note}` : ''}`,
     user_id: null,
     date: today(),
     created_at: now(),
