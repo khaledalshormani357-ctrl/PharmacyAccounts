@@ -3249,3 +3249,91 @@ export function getTransactions(filters?: any): Transaction[] {
 export function deleteTransaction(id: number): void {}
 
 export function getTransactionItems(id: number): any[] { return []; }
+
+
+export interface DatabaseIntegrityIssue {
+  code: string;
+  severity: 'error' | 'warning';
+  count: number;
+  message: string;
+}
+export interface DatabaseIntegrityReport {
+  checked_at: string;
+  counts: Record<string, number>;
+  issues: DatabaseIntegrityIssue[];
+  repaired: number;
+}
+
+/**
+ * Read-only integrity scan by default. Safe repair only updates derived batch
+ * status when a batch has no quantity or its recorded expiry date has passed.
+ * It never deletes rows, changes quantities, or edits financial transactions.
+ */
+export function inspectAndRepairDatabase(repair = false): DatabaseIntegrityReport {
+  const issues: DatabaseIntegrityIssue[] = [];
+  let repaired = 0;
+  const productIds = new Set<number>();
+  const duplicateProductIds = new Set<number>();
+  for (const product of store.products) {
+    if (productIds.has(product.id)) duplicateProductIds.add(product.id);
+    productIds.add(product.id);
+  }
+  const batchIds = new Set<number>();
+  const duplicateBatchIds = new Set<number>();
+  const missingProductBatches = store.batches.filter(batch => !productIds.has(batch.product_id));
+  const invalidBatchQuantities = store.batches.filter(batch => !Number.isFinite(batch.quantity) || batch.quantity < 0);
+  const zeroQuantityBatches = store.batches.filter(batch => Number.isFinite(batch.quantity) && batch.quantity <= 1e-8 && batch.status !== 'DEPLETED' && batch.status !== 'RECALLED');
+  const expiredStillActive = store.batches.filter(batch => batch.status === 'ACTIVE' && !!batch.expiry_date && batch.expiry_date <= today());
+  const movementMissingBatch = store.stockMovements.filter(movement => !store.batches.some(batch => batch.id === movement.batch_id));
+  const movementMissingProduct = store.stockMovements.filter(movement => !productIds.has(movement.product_id));
+  const invalidUnits = store.productUnits.filter(unit => !productIds.has(unit.product_id) || !Number.isFinite(unit.conversion_factor) || unit.conversion_factor <= 0);
+  const usernameCounts = new Map<string, number>();
+  store.users.forEach(user => usernameCounts.set(user.username.trim().toLowerCase(), (usernameCounts.get(user.username.trim().toLowerCase()) || 0) + 1));
+  const duplicateUsernames = [...usernameCounts.values()].filter(count => count > 1).reduce((sum, count) => sum + count, 0);
+
+  for (const batch of store.batches) {
+    if (batchIds.has(batch.id)) duplicateBatchIds.add(batch.id);
+    batchIds.add(batch.id);
+    if (!repair || batch.status === 'RECALLED') continue;
+    let targetStatus: BatchStatus | null = null;
+    if (Number.isFinite(batch.quantity) && batch.quantity <= 1e-8 && batch.status !== 'DEPLETED') targetStatus = 'DEPLETED';
+    else if (batch.status === 'ACTIVE' && !!batch.expiry_date && batch.expiry_date <= today()) targetStatus = 'EXPIRED';
+    if (targetStatus && targetStatus !== batch.status) {
+      batch.status = targetStatus;
+      repaired += 1;
+      addAuditLog({
+        action: 'DATABASE_SAFE_REPAIR', entity: 'batch', entity_id: batch.id,
+        before_data: JSON.stringify({ status: targetStatus === 'DEPLETED' ? 'ACTIVE_OR_STALE' : 'ACTIVE' }),
+        after_data: JSON.stringify({ status: targetStatus, quantity: batch.quantity, expiry_date: batch.expiry_date }),
+        reason: 'تصحيح حالة مشتقة فقط؛ لم تتغير الكمية أو المعاملات المالية',
+      });
+    }
+  }
+  if (repaired > 0) persistStore();
+
+  const addIssue = (code: string, severity: 'error' | 'warning', count: number, message: string) => {
+    if (count > 0) issues.push({ code, severity, count, message });
+  };
+  addIssue('duplicate_products', 'error', duplicateProductIds.size, 'معرّفات أصناف مكررة');
+  addIssue('duplicate_batches', 'error', duplicateBatchIds.size, 'معرّفات دفعات مكررة');
+  addIssue('orphan_batches', 'error', missingProductBatches.length, 'دفعات مرتبطة بأصناف غير موجودة');
+  addIssue('invalid_batch_quantity', 'error', invalidBatchQuantities.length, 'كميات دفعات سالبة أو غير رقمية؛ لم يتم تعديلها تلقائياً');
+  addIssue('zero_quantity_status', 'warning', store.batches.filter(batch => batch.quantity <= 1e-8 && batch.status !== 'DEPLETED' && batch.status !== 'RECALLED').length, 'دفعات بلا رصيد لم تُحدّث حالتها بعد');
+  addIssue('expired_active', 'warning', store.batches.filter(batch => batch.status === 'ACTIVE' && !!batch.expiry_date && batch.expiry_date <= today()).length, 'دفعات منتهية ما زالت نشطة');
+  addIssue('movement_missing_batch', 'error', movementMissingBatch.length, 'حركات مخزون تشير إلى دفعات مفقودة');
+  addIssue('movement_missing_product', 'error', movementMissingProduct.length, 'حركات مخزون تشير إلى أصناف مفقودة');
+  addIssue('invalid_product_units', 'error', invalidUnits.length, 'وحدات تحويل غير صالحة أو مرتبطة بأصناف مفقودة');
+  addIssue('duplicate_usernames', 'warning', duplicateUsernames, 'أسماء مستخدمين مكررة بعد تجاهل حالة الأحرف والمسافات');
+
+  return {
+    checked_at: now(),
+    counts: {
+      products: store.products.length, batches: store.batches.length,
+      stockMovements: store.stockMovements.length, users: store.users.length,
+      customers: store.customers.length, suppliers: store.suppliers.length,
+      sales: store.sales.length, purchases: store.purchases.length,
+      auditLogs: store.auditLogs.length,
+    },
+    issues, repaired,
+  };
+}
