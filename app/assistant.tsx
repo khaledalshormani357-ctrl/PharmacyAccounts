@@ -37,7 +37,7 @@ const QUICK_QUESTIONS = [
 ];
 
 async function askGeminiQuestion(question: string, apiKey: string): Promise<string> {
-  const response = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=' + encodeURIComponent(apiKey), {
+  const response = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=' + encodeURIComponent(apiKey), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -47,8 +47,21 @@ async function askGeminiQuestion(question: string, apiKey: string): Promise<stri
       generationConfig: { temperature: 0.2 },
     }),
   });
-  const body: any = await response.json();
-  if (!response.ok) throw new Error(body?.error?.message || 'تعذر الاتصال بخدمة Gemini');
+  const body: any = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    // Keep provider internals out of the chat; give the user a useful Arabic message.
+    const providerMessage = String(body?.error?.message || '');
+    if (response.status === 401 || response.status === 403 || /api key|permission|unauthorized/i.test(providerMessage)) {
+      throw new Error('مفتاح Gemini API غير صالح أو لا يملك الصلاحية المطلوبة. راجع المفتاح من إعدادات التطبيق.');
+    }
+    if (response.status === 429 || /quota|resource exhausted|rate limit/i.test(providerMessage)) {
+      throw new Error('تم بلوغ حد استخدام Gemini API. انتظر قليلاً أو تحقق من الحصة المتاحة.');
+    }
+    if (/model.*(not found|no longer available)|not available to new users/i.test(providerMessage)) {
+      throw new Error('نموذج Gemini المحدد غير متاح. حدّث التطبيق إلى أحدث نسخة ثم أعد المحاولة.');
+    }
+    throw new Error('تعذر الحصول على إجابة من Gemini. تحقق من اتصال الإنترنت وإعدادات المفتاح ثم أعد المحاولة.');
+  }
   const answer = body?.candidates?.[0]?.content?.parts?.map((part: any) => part.text || '').join('').trim();
   if (!answer) throw new Error('لم تُرجع خدمة الذكاء إجابة');
   return answer;
