@@ -56,7 +56,7 @@ export default function PosScreen() {
   const [customerSearch, setCustomerSearch] = useState('');
   const [saving, setSaving] = useState(false);
 
-  const currencySymbol = getSetting('currency_symbol') || 'ر.س';
+  const currencySymbol = getSetting('currency_symbol') || 'ر.ي';
 
   const handleProductSearch = useCallback((q: string) => {
     setSearch(q);
