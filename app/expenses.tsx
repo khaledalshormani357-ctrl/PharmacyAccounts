@@ -1,12 +1,12 @@
 // Smart Pharmacy ERP — Expenses Screen
 import React, { useState, useCallback } from 'react';
-import { View, Text, TouchableOpacity, FlatList, RefreshControl, ScrollView } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, FlatList, RefreshControl, ScrollView, Modal } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '@/contexts/ThemeContext';
-import { getExpenses, deleteExpense, getExpensesByCategory, getSetting, Expense } from '@/services/database';
+import { getExpenses, deleteExpense, getExpensesByCategory, getSetting, getExpenseCategories, addExpenseCategory, removeExpenseCategory, Expense } from '@/services/database';
 import { formatCurrency, formatDate, getToday, getDateRange } from '@/constants/i18n';
 import { useAlert } from '@/template';
 import { PdfActions } from '@/components/PdfActions';
@@ -27,6 +27,12 @@ export default function ExpensesScreen() {
   const [byCategory, setByCategory] = useState<{ category: string; total: number }[]>([]);
   const [period, setPeriod] = useState('today');
   const [refreshing, setRefreshing] = useState(false);
+  const [accountsOpen, setAccountsOpen] = useState(false);
+  const [accountName, setAccountName] = useState('');
+  const [accountCategories, setAccountCategories] = useState<string[]>(getExpenseCategories());
+  const refreshAccounts = () => setAccountCategories(getExpenseCategories());
+  const addAccount = () => { const result = addExpenseCategory(accountName); if (!result.ok) { showAlert('تعذر إضافة الحساب', result.message || 'تحقق من الاسم'); return; } setAccountName(''); refreshAccounts(); };
+  const deleteAccount = (name: string) => showAlert('إزالة حساب المصروفات', 'لا يمكن إزالة حساب مرتبط بمصروف سابق.', [{ text: 'إلغاء', style: 'cancel' }, { text: 'إزالة', style: 'destructive', onPress: () => { const result = removeExpenseCategory(name); if (!result.ok) showAlert('تعذر الإزالة', result.message || 'الحساب غير قابل للإزالة'); refreshAccounts(); } }]);
 
   const load = useCallback(() => {
     const { from, to } = getDateRange(period);
@@ -67,6 +73,9 @@ export default function ExpensesScreen() {
     <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
       <View style={{ backgroundColor: theme.colors.error, paddingTop: insets.top + 10, paddingBottom: 14, paddingHorizontal: 14 }}>
         <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+          <TouchableOpacity onPress={() => { refreshAccounts(); setAccountsOpen(true); }} style={{ backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 7 }}>
+            <Text style={{ color: '#FFFFFF', fontSize: 12, fontWeight: '700' }}>دليل الحسابات</Text>
+          </TouchableOpacity>
           <View style={{ flexDirection: 'row', gap: 8 }}>
             <TouchableOpacity onPress={() => router.push('/add-expense')} style={{ backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 6, flexDirection: 'row', alignItems: 'center', gap: 4 }}>
               <MaterialIcons name="add" size={16} color="#FFFFFF" />
@@ -143,6 +152,22 @@ export default function ExpensesScreen() {
           </View>
         }
       />
+      <Modal visible={accountsOpen} animationType="slide" transparent onRequestClose={() => setAccountsOpen(false)}>
+        <View style={{ flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.35)' }}>
+          <View style={{ maxHeight: '85%', backgroundColor: theme.colors.background, borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 16, paddingBottom: insets.bottom + 16 }}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+              <TouchableOpacity onPress={() => setAccountsOpen(false)}><MaterialIcons name="close" size={24} color={theme.colors.textPrimary} /></TouchableOpacity>
+              <Text style={{ color: theme.colors.textPrimary, fontSize: 18, fontWeight: '800' }}>دليل حسابات المصروفات</Text>
+            </View>
+            <TextInput value={accountName} onChangeText={setAccountName} placeholder="اسم الحساب الجديد" placeholderTextColor={theme.colors.textTertiary} style={{ color: theme.colors.textPrimary, textAlign: 'right', borderWidth: 1, borderColor: theme.colors.border, borderRadius: 10, padding: 12, marginBottom: 8 }} />
+            <TouchableOpacity onPress={addAccount} style={{ backgroundColor: theme.colors.primary, borderRadius: 10, padding: 12, alignItems: 'center', marginBottom: 12 }}><Text style={{ color: '#fff', fontWeight: '700' }}>إضافة حساب</Text></TouchableOpacity>
+            <FlatList data={accountCategories} keyExtractor={item => item} renderItem={({ item }) => <View style={{ flexDirection: 'row', alignItems: 'center', padding: 10, borderBottomWidth: 1, borderBottomColor: theme.colors.border }}>
+              <TouchableOpacity onPress={() => deleteAccount(item)}><MaterialIcons name="delete-outline" size={21} color={theme.colors.error} /></TouchableOpacity>
+              <Text style={{ flex: 1, textAlign: 'right', color: theme.colors.textPrimary, marginRight: 10 }}>{item}</Text>
+            </View>} />
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
