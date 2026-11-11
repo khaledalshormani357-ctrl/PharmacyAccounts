@@ -516,6 +516,41 @@ test('backup excludes device PIN settings and restore preserves the receiving de
   assert.equal(db.getSetting('pin_enabled'), 'true');
 });
 
+test('restore advances entity ID counters beyond restored records', async () => {
+  await db.databaseReady;
+  const backup = db.createBackup();
+  const restoredProductId = 900000;
+  backup.products.push({
+    id: restoredProductId, barcode: null, internal_code: null, trade_name: 'Restored high ID product',
+    generic_name: null, active_ingredient: null, strength: null, dosage_form: null, manufacturer: null,
+    category: null, prescription_required: false, controlled: false, inventory_unit: 'Tablet',
+    minimum_stock: 0, reorder_level: 0, selling_price: 15, default_purchase_price: 10,
+    active: true, notes: null, created_at: '2026-10-21T00:00:00.000Z', updated_at: '2026-10-21T00:00:00.000Z',
+  });
+  const restored = await db.restoreBackup(backup);
+  assert.equal(restored.success, true);
+  const added = product('Product after restoring high ID');
+  assert.ok(added.id > restoredProductId, `expected new ID > ${restoredProductId}, got ${added.id}`);
+});
+
+test('restore advances invoice numbering beyond restored sales and purchases', async () => {
+  await db.databaseReady;
+  const medicine = product('Invoice counter restore example');
+  configure(medicine.id);
+  buy(medicine.id, 'RESTORE-INVOICE-BATCH', '2027-12-31', 5, 'Tablet', 10);
+  const backup = db.createBackup();
+  const highestInvoice = 900000;
+  backup.purchases[backup.purchases.length - 1].invoice_number = `INV-${String(highestInvoice).padStart(6, '0')}`;
+  const restored = await db.restoreBackup(backup);
+  assert.equal(restored.success, true);
+  const nextProduct = product('Product after invoice restore');
+  configure(nextProduct.id);
+  const nextPurchase = buy(nextProduct.id, 'AFTER-RESTORE-BATCH', '2027-12-31', 1, 'Tablet', 10);
+  assert.ok(nextPurchase.purchase.invoice_number);
+  const nextNumber = Number(nextPurchase.purchase.invoice_number.replace(/^INV-/, ''));
+  assert.ok(nextNumber > highestInvoice, `expected invoice number > ${highestInvoice}, got ${nextPurchase.purchase.invoice_number}`);
+});
+
 test('invalid backup is rejected before changing current inventory', async () => {
   await db.databaseReady;
   const before = db.getProducts().length;
