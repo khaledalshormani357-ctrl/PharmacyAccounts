@@ -5,7 +5,9 @@ import { Stack } from 'expo-router';
 import { ThemeProvider } from '@/contexts/ThemeContext';
 import { useEffect, useState, useCallback } from 'react';
 import { StatusBar } from 'expo-status-bar';
+import { Platform } from 'react-native';
 import { databaseReady, getSetting } from '@/services/database';
+import { scheduleExpiryNotifications } from '@/services/expiry-notifications';
 import { PinLock } from '@/components/ui';
 import { CloudAuthGate } from '@/components/CloudAuthGate';
 import { AnimatedBrandSplash } from '@/components/AnimatedBrandSplash';
@@ -56,6 +58,7 @@ function AppShell() {
         <Stack.Screen name="login" options={{ headerShown: false }} />
         <Stack.Screen name="reset-password" options={{ headerShown: false }} />
         <Stack.Screen name="pos" options={{ headerShown: false }} />
+        <Stack.Screen name="barcode-scanner" options={{ headerShown: false }} />
         <Stack.Screen name="add-product" options={{ headerShown: false, presentation: 'modal' }} />
         <Stack.Screen name="product-detail" options={{ headerShown: false }} />
         <Stack.Screen name="inventory" options={{ headerShown: false }} />
@@ -105,7 +108,17 @@ export default function RootLayout() {
   const [storageReady, setStorageReady] = useState(false);
 
   useEffect(() => {
-    databaseReady.finally(() => setStorageReady(true));
+    databaseReady.finally(() => {
+      setStorageReady(true);
+      // Expiry alerts are advisory and must never block the UI; skip on web.
+      if (Platform.OS !== 'web') {
+        try {
+          void scheduleExpiryNotifications();
+        } catch {
+          // Ignore notification failures at startup.
+        }
+      }
+    });
   }, []);
 
   if (!storageReady) return null;
