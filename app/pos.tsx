@@ -17,6 +17,7 @@ import {
 import { formatCurrency } from '@/constants/i18n';
 import { useAlert } from '@/template';
 import { formatUnitBreakdown, isValidUnitQuantity } from '@/services/unit-conversion';
+import { usePermissions } from '@/hooks/usePermissions';
 
 interface CartItem {
   product: Product;
@@ -39,6 +40,7 @@ export default function PosScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { showAlert } = useAlert();
+  const { can } = usePermissions();
   const params = useLocalSearchParams<{ type?: string; barcode?: string }>();
 
   const [cart, setCart] = useState<CartItem[]>([]);
@@ -147,6 +149,8 @@ export default function PosScreen() {
   const handleSave = async () => {
     if (cart.length === 0) { showAlert('تنبيه', 'أضف صنفاً واحداً على الأقل'); return; }
     if (saleType === 'credit' && !selectedCustomer) { showAlert('تنبيه', 'اختر عميلاً للبيع الآجل'); return; }
+    // UI hint only: createSale() enforces 'customers.credit' in the service too.
+    if (saleType === 'credit' && !can('customers.credit')) { showAlert('صلاحية غير كافية', 'ليس لديك صلاحية البيع الآجل.'); return; }
     if (cart.some(item => !Number.isFinite(Number(item.quantity)) || Number(item.quantity) <= 0 || !Number.isFinite(Number(item.unit_price)) || Number(item.unit_price) < 0 || !Number.isFinite(Number(item.discount)) || Number(item.discount) < 0)) { showAlert('تحقق من الفاتورة', 'تأكد من أن الكميات موجبة والأسعار والخصومات صحيحة.'); return; }
     if (cart.some(item => !isValidUnitQuantity(Number(item.quantity), item.unit))) { showAlert('كمية غير صحيحة', 'الوحدات العددية مثل العلبة والحبة تقبل أعدادًا صحيحة؛ الكسور متاحة لوحدات الحجم والوزن.'); return; }
     if (!Number.isFinite(totalDiscount) || totalDiscount < 0 || totalDiscount > subtotal) { showAlert('خصم غير صحيح', 'خصم الفاتورة يجب ألا يتجاوز مجموع الأصناف.'); return; }

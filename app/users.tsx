@@ -7,6 +7,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '@/contexts/ThemeContext';
 import { addUser, getUsers, updateUser, User, UserRole } from '@/services/database';
 import { useAlert } from '@/template';
+import { usePermissions } from '@/hooks/usePermissions';
 
 const ROLES: UserRole[] = ['ADMIN', 'MANAGER', 'PHARMACIST', 'CASHIER', 'STOREKEEPER', 'ACCOUNTANT'];
 const ROLE_LABEL: Record<UserRole, string> = { ADMIN: 'مدير النظام', MANAGER: 'مدير الصيدلية', PHARMACIST: 'صيدلي', CASHIER: 'كاشير', STOREKEEPER: 'أمين مستودع', ACCOUNTANT: 'محاسب' };
@@ -16,6 +17,7 @@ export default function UsersScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { showAlert } = useAlert();
+  const { can, bound } = usePermissions();
   const [users, setUsers] = useState<User[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState<User | null>(null);
@@ -27,21 +29,40 @@ export default function UsersScreen() {
 
   const load = useCallback(() => setUsers(getUsers()), []);
   useFocusEffect(useCallback(() => { load(); }, [load]));
+  // A bound actor without 'system.users' must not manage users at all:
+  // alert once and go back. In legacy local mode (unbound) the screen
+  // stays usable as before. The services enforce this too.
+  useFocusEffect(useCallback(() => {
+    if (bound && !can('system.users')) {
+      showAlert('صلاحية غير كافية', 'ليس لديك صلاحية إدارة الموظفين.', [{ text: 'حسناً', onPress: () => router.back() }]);
+    }
+  }, [bound, can, router, showAlert]));
   const reset = () => { setEditing(null); setUsername(''); setFullName(''); setPassword(''); setRole('CASHIER'); setPhone(''); };
-  const openEdit = (user: User) => { setEditing(user); setUsername(user.username); setFullName(user.full_name); setPassword(''); setRole(user.role); setPhone(user.phone || ''); setShowForm(true); };
+  const guardUsersPermission = () => {
+    if (can('system.users')) return true;
+    showAlert('صلاحية غير كافية', 'ليس لديك صلاحية إدارة الموظفين.');
+    return false;
+  };
+  const openAdd = () => { if (!guardUsersPermission()) return; reset(); setShowForm(true); };
+  const openEdit = (user: User) => { if (!guardUsersPermission()) return; setEditing(user); setUsername(user.username); setFullName(user.full_name); setPassword(''); setRole(user.role); setPhone(user.phone || ''); setShowForm(true); };
   const save = () => {
     if (!fullName.trim() || (!editing && (!username.trim() || password.length < 4))) { showAlert('تنبيه', editing ? 'أدخل الاسم الكامل' : 'أدخل الاسم وكلمة مرور من 4 أحرف على الأقل'); return; }
-    if (editing) updateUser(editing.id, { full_name: fullName.trim(), role, phone: phone.trim() || null, password });
-    else addUser({ username: username.trim(), full_name: fullName.trim(), password, role, phone: phone.trim() });
+    try {
+      if (editing) updateUser(editing.id, { full_name: fullName.trim(), role, phone: phone.trim() || null, password });
+      else addUser({ username: username.trim(), full_name: fullName.trim(), password, role, phone: phone.trim() });
+    } catch {
+      showAlert('صلاحية غير كافية', 'ليس لديك صلاحية تنفيذ هذه العملية');
+      return;
+    }
     setShowForm(false); reset(); load(); showAlert('تم', editing ? 'تم تحديث المستخدم' : 'تمت إضافة المستخدم');
   };
-  const toggle = (user: User) => { updateUser(user.id, { active: !user.active }); load(); };
+  const toggle = (user: User) => { if (!guardUsersPermission()) return; updateUser(user.id, { active: !user.active }); load(); };
   const input = { height: 44, borderWidth: 1, borderColor: theme.colors.border, borderRadius: 8, paddingHorizontal: 10, color: theme.colors.textPrimary, textAlign: 'right' as const, backgroundColor: theme.colors.surface };
 
   return <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
     <View style={{ backgroundColor: '#0052CC', paddingTop: insets.top + 10, paddingBottom: 14, paddingHorizontal: 14 }}>
       <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-        <View style={{ flexDirection: 'row', gap: 6 }}><TouchableOpacity onPress={() => router.push('/employee-access' as any)} style={{ backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 7 }}><Text style={{ color: '#FFFFFF', fontWeight: '700', fontSize: 11 }}>الصلاحيات</Text></TouchableOpacity><TouchableOpacity onPress={() => { reset(); setShowForm(true); }} style={{ backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 7 }}><Text style={{ color: '#FFFFFF', fontWeight: '700', fontSize: 11 }}>+ موظف</Text></TouchableOpacity></View>
+        <View style={{ flexDirection: 'row', gap: 6 }}><TouchableOpacity onPress={() => router.push('/employee-access' as any)} style={{ backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 7 }}><Text style={{ color: '#FFFFFF', fontWeight: '700', fontSize: 11 }}>الصلاحيات</Text></TouchableOpacity><TouchableOpacity onPress={openAdd} style={{ backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 7 }}><Text style={{ color: '#FFFFFF', fontWeight: '700', fontSize: 11 }}>+ موظف</Text></TouchableOpacity></View>
         <Text style={{ color: '#FFFFFF', fontWeight: '800', fontSize: 17 }}>إدارة المستخدمين</Text>
         <TouchableOpacity onPress={() => router.back()}><MaterialIcons name="arrow-forward" size={23} color="#FFFFFF" /></TouchableOpacity>
       </View>

@@ -43,6 +43,27 @@ pnpm run lint
 
 `.env` is not tracked in git (see `.gitignore`); only `.env.example` is committed. Because a previous `.env` was tracked, rotate the Supabase anon/publishable key in the Supabase dashboard and update the devices. SQL migrations under `supabase/` are applied manually in the Supabase SQL Editor — they are not applied automatically by the app.
 
+## الصلاحيات (Permissions)
+
+The permission map lives in `services/employee-permissions.ts`: 25 permissions in 5 groups, with defaults per role — ADMIN (everything), MANAGER (everything except user management), PHARMACIST, CASHIER (cash sales, customers, cashbox), STOREKEEPER (inventory, stocktake, opening stock), ACCOUNTANT (reports, profit, audit). A per-user override can grant or revoke a single permission from the employee-permissions screen (`app/employee-access.tsx`); overrides win over role defaults.
+
+Enforcement is real and lives in the services (`services/erp-database.ts`), not in button visibility: every sensitive operation (creating/cancelling sales and purchases, returns, inventory edits and adjustments, opening stock, free samples, customer management and collection, credit sales, user management, backup/restore) checks the current actor first. A denied call changes nothing and is recorded in the audit log as `PERMISSION_DENIED`. Hiding a link in the UI is only a hint.
+
+How the session is bound: after a cloud sign-in (`app/login.tsx`, including biometric sign-in, which goes through the same path), the login username is resolved to a matching active local user (`services/session.ts`) and that user becomes the current actor. A cloud login with no matching local record is bound to no actor and may read data but is denied every guarded write. Signing out clears the actor. In local mode (no Supabase configured) there is no login, so no actor is bound and the app behaves as before — single-user, protected only by the device PIN. Full enforcement is therefore active only after a cloud login.
+
+خريطة الصلاحيات في `services/employee-permissions.ts`: 25 صلاحية في 5 مجموعات وافتراضيات لكل دور، ويمكن منح تجاوز فردي من شاشة صلاحيات الموظفين. الفرض الحقيقي في طبقة الخدمات، والرفض يُسجَّل في التدقيق، وإخفاء الأزرار مجرد تلميح. الجلسة تُربط بالدخول السحابي عبر اسم المستخدم، والوضع المحلي بلا دخول يعتمد على PIN فقط.
+
+
+## Persistence (SQLite, Phase 1)
+
+On native devices the store is persisted in SQLite (`pharmacy.db`, see
+`services/sqlite-store.ts`): one row per entity row plus a `meta` table
+for counters and settings, with differential writes inside a single
+transaction per persist. On first launch an existing AsyncStorage
+snapshot is migrated once into SQLite and the legacy copy is kept as a
+rollback. On web and in unit tests the backend is still AsyncStorage.
+Full details, schema, migration and rollback: `docs/SQLITE_MIGRATION.md`.
+
 ## Main Dependencies
 
 - React Native: 0.79.4

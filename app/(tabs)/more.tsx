@@ -7,6 +7,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '@/contexts/ThemeContext';
 import { getSetting, getCashBalance } from '@/services/database';
 import { formatCurrency } from '@/constants/i18n';
+import { usePermissions } from '@/hooks/usePermissions';
 
 interface MenuItemProps {
   icon: any; label: string; sublabel?: string; color?: string; onPress: () => void; badge?: string;
@@ -52,6 +53,7 @@ export default function MoreScreen() {
   const { theme } = useTheme();
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  const { can } = usePermissions();
   const pharmacyName = getSetting('pharmacy_name') || 'صيدلية ذكية';
   const cashBalance = getCashBalance();
 
@@ -92,11 +94,13 @@ export default function MoreScreen() {
         </Section>
 
         <Section title="النظام">
-          <MenuItem icon="manage-accounts" label="الموظفون والصلاحيات" sublabel="إدارة الأدوار ومصفوفة الصلاحيات وحزمة الموظف" color="#0052CC" onPress={() => router.push('/users' as any)} />
+          {/* Hiding is only a UI hint; the services enforce these permissions
+              for real. In legacy local mode (no actor bound) all links show. */}
+          {can('system.users') && <MenuItem icon="manage-accounts" label="الموظفون والصلاحيات" sublabel="إدارة الأدوار ومصفوفة الصلاحيات وحزمة الموظف" color="#0052CC" onPress={() => router.push('/users' as any)} />}
           <MenuItem icon="build-circle" label="فحص البيانات والنقل المحلي" sublabel="تشخيص قاعدة البيانات وإصلاح آمن" color="#6554C0" onPress={() => router.push('/system-tools' as any)} />
           <MenuItem icon="swap-horiz" label="النقل المباشر بين هاتفين" sublabel="نقل نسخة مشفرة عبر شبكة Wi-Fi محلية" color="#00875A" onPress={() => router.push('/local-transfer' as any)} />
-          <MenuItem icon="history" label="سجل التدقيق" color="#5E6C84" onPress={() => router.push('/audit-log')} />
-          <MenuItem icon="backup" label="النسخ الاحتياطي" color="#00875A" onPress={() => router.push('/backup')} />
+          {can('system.audit') && <MenuItem icon="history" label="سجل التدقيق" color="#5E6C84" onPress={() => router.push('/audit-log')} />}
+          {can('system.backup') && <MenuItem icon="backup" label="النسخ الاحتياطي" color="#00875A" onPress={() => router.push('/backup')} />}
           <MenuItem icon="settings" label="الإعدادات" onPress={() => router.push('/settings')} />
         </Section>
       </ScrollView>
