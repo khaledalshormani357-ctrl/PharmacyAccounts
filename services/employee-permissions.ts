@@ -1,4 +1,7 @@
-import { EmployeePermissionMap, UserRole } from '@/services/database';
+// Type-only import: this module must not import the database at runtime,
+// otherwise services/erp-database.ts (which uses isPermissionAllowed below)
+// would form a runtime import cycle with this file.
+import type { EmployeePermissionMap, UserRole } from './erp-database';
 
 export const PERMISSION_GROUPS = [
   { id: 'sales', title: 'المبيعات', permissions: [

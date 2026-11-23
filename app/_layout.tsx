@@ -109,6 +109,11 @@ export default function RootLayout() {
 
   useEffect(() => {
     databaseReady.finally(() => {
+      // Local mode: when Supabase is not configured, CloudAuthGate renders
+      // the app without any login, so no session actor is bound here. The
+      // app then runs as the legacy single-user local mode and relies on the
+      // device PIN (see AppShell); full permission enforcement is active
+      // only after a cloud login binds an actor in app/login.tsx.
       setStorageReady(true);
       // Expiry alerts are advisory and must never block the UI; skip on web.
       if (Platform.OS !== 'web') {

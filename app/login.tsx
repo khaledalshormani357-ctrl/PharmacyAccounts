@@ -21,6 +21,7 @@ import { getSharedSupabaseClient } from '@/template/core/client';
 import { isValidLoginIdentifier, normalizeLoginIdentifier } from '@/services/username-login-utils';
 import { signInWithUsername } from '@/services/username-login';
 import { clearBiometricLogin, getBiometricCredentials, getBiometricLoginStatus, saveBiometricLogin } from '@/services/biometric-login';
+import { resolveActorForUsername, setCurrentActor } from '@/services/session';
 
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -87,6 +88,12 @@ export default function LoginScreen() {
       }
       return false;
     }
+
+    // Bind the cloud login to the local session actor (if a matching active
+    // local user exists). A cloud login with no local record binds to null
+    // and may only read data; every guarded write will deny it. The
+    // biometric path goes through this same function, so it is bound too.
+    setCurrentActor(resolveActorForUsername(loginUsername));
 
     if (!fromBiometric && enableBiometricAfterLogin && biometricAvailable) {
       try {

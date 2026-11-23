@@ -2,6 +2,7 @@ import React, { ReactNode, useEffect } from 'react';
 import { ActivityIndicator, View } from 'react-native';
 import { useRouter, useSegments } from 'expo-router';
 import { AuthProvider, useAuth } from '@/template';
+import { clearCurrentActor } from '@/services/session';
 
 const supabaseConfigured = Boolean(
   process.env.EXPO_PUBLIC_SUPABASE_URL && process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY
@@ -17,7 +18,12 @@ function CloudAuthContent({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (!initialized || loading) return;
-    if (!user && !onLogin && !onPasswordReset) router.replace('/login' as never);
+    if (!user && !onLogin && !onPasswordReset) {
+      // Signing out (or an expired session) unbinds the local actor, so a
+      // later user on this device cannot inherit the previous permissions.
+      clearCurrentActor();
+      router.replace('/login' as never);
+    }
     if (user && onLogin) router.replace('/(tabs)');
   }, [initialized, loading, user, onLogin, onPasswordReset, router]);
 
