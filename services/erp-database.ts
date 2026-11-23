@@ -4,6 +4,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { toBaseQuantity, priceForUnit, isValidIsoDate, isValidUnitQuantity } from './unit-conversion';
 import { withAtomicMutation } from './atomic-store';
+import { isPermissionAllowed } from './employee-permissions';
 
 // ═══════════════════════════════════════════════════════════
 // TYPES & INTERFACES
@@ -585,6 +586,89 @@ export async function flushDatabaseWrites(): Promise<void> {
   await persistQueue;
 }
 
+// ═══════════════════════════════════════════════════════════
+// CURRENT ACTOR (SESSION) & PERMISSION ENFORCEMENT
+// ═══════════════════════════════════════════════════════════
+//
+// The session state lives here, in the same module as the data it guards,
+// so services never import the session wrapper (services/session.ts is only
+// a thin public API over these functions). `services/session.ts` resolves a
+// cloud login to a local User and binds it with setCurrentActorId().
+//
+// Actor resolution rule (documented, and relied on by the tests):
+//  - A function argument `actor` of type User  -> that user is checked.
+//  - `actor` explicitly null                    -> denied (a cloud login with
+//    no matching local record, or an explicitly actor-less call).
+//  - `actor` omitted (undefined)               -> the session actor is used:
+//      * session bound to a User -> that user is checked;
+//      * session bound to null   -> denied (cloud login, no local record);
+//      * session never bound     -> legacy local mode: allowed. The app
+//        without a Supabase login is single-user and relies on the device
+//        PIN; existing call sites that pass no actor keep working.
+//  - An inactive actor is denied everything, even with an explicit override.
+
+export const PERMISSION_DENIED_MESSAGE = 'ليس لديك صلاحية تنفيذ هذه العملية';
+
+let currentActorId: number | null = null;
+let currentActorBound = false;
+
+/** Bind the session to a local user id, or to null for a cloud login with no local record. Marks the session as bound. */
+export function setCurrentActorId(id: number | null): void {
+  currentActorId = id;
+  currentActorBound = true;
+}
+
+export function getCurrentActorId(): number | null {
+  return currentActorId;
+}
+
+/** True once a login (or an explicit test actor) has bound the session. */
+export function isCurrentActorBound(): boolean {
+  return currentActorBound;
+}
+
+/** Unbind the session entirely (logout / legacy local mode). */
+export function clearCurrentActorId(): void {
+  currentActorId = null;
+  currentActorBound = false;
+}
+
+/** The bound local user, or null when the session is bound to no local record or is unbound. */
+export function getCurrentActor(): User | null {
+  if (currentActorId === null) return null;
+  return store.users.find(u => u.id === currentActorId) ?? null;
+}
+
+type ResolvedActor = User | null | 'legacy';
+
+function resolveActor(actor?: User | null): ResolvedActor {
+  if (actor !== undefined) return actor;
+  if (!currentActorBound) return 'legacy';
+  return getCurrentActor();
+}
+
+/**
+ * Check `permissionId` for the resolved actor. Returns null when allowed,
+ * otherwise logs a PERMISSION_DENIED audit entry (before any mutation) and
+ * returns the denial message. Callers return it as `{success:false, error}`
+ * or throw it, depending on their return type.
+ */
+function checkPermission(actor: User | null | undefined, permissionId: string, entity: string): string | null {
+  const resolved = resolveActor(actor);
+  if (resolved === 'legacy') return null;
+  const allowed = !!resolved && resolved.active
+    && isPermissionAllowed(resolved.role, permissionId, resolved.permissions);
+  if (allowed) return null;
+  addAuditLog({
+    action: 'PERMISSION_DENIED', entity,
+    entity_id: resolved?.id ?? null,
+    user_id: resolved?.id ?? null,
+    user_name: resolved?.username ?? null,
+    reason: permissionId,
+  });
+  return PERMISSION_DENIED_MESSAGE;
+}
+
 let lastCorruptSnapshotKey: string | null = null;
 
 /** Key of the most recent corrupt snapshot preserved in storage, if any. */
@@ -777,7 +861,9 @@ export function getUsers(): User[] {
 export function addUser(data: {
   username: string; password: string; full_name: string; role: UserRole; phone?: string;
   job_title?: string | null; permissions?: EmployeePermissionMap;
-}): User {
+}, actor?: User | null): User {
+  const denied = checkPermission(actor, 'system.users', 'user');
+  if (denied) throw new Error(denied);
   const user: User = {
     id: ids.users++, username: data.username, password_hash: simpleHash(data.password),
     full_name: data.full_name, role: data.role, phone: data.phone ?? null,
@@ -792,7 +878,9 @@ export function addUser(data: {
   return user;
 }
 
-export function updateUser(id: number, data: Partial<Pick<User, 'full_name' | 'role' | 'phone' | 'active' | 'permissions' | 'job_title'> & { password: string }>): void {
+export function updateUser(id: number, data: Partial<Pick<User, 'full_name' | 'role' | 'phone' | 'active' | 'permissions' | 'job_title'> & { password: string }>, actor?: User | null): void {
+  const denied = checkPermission(actor, 'system.users', 'user');
+  if (denied) throw new Error(denied);
   const user = store.users.find(u => u.id === id);
   if (!user) return;
   if (data.full_name !== undefined) user.full_name = data.full_name;
@@ -843,7 +931,9 @@ export function getProductByCatalogSourceId(sourceId: string): Product | null {
   return store.products.find(p => p.catalog_source_id === sourceId) ?? null;
 }
 
-export function addProduct(data: Omit<Product, 'id' | 'created_at' | 'updated_at'>): Product {
+export function addProduct(data: Omit<Product, 'id' | 'created_at' | 'updated_at'>, actor?: User | null): Product {
+  const denied = checkPermission(actor, 'inventory.edit', 'product');
+  if (denied) throw new Error(denied);
   const product: Product = {
     ...data,
     id: ids.products++,
@@ -856,7 +946,9 @@ export function addProduct(data: Omit<Product, 'id' | 'created_at' | 'updated_at
   return product;
 }
 
-export function updateProduct(id: number, data: Partial<Product>): void {
+export function updateProduct(id: number, data: Partial<Product>, actor?: User | null): void {
+  const denied = checkPermission(actor, 'inventory.edit', 'product');
+  if (denied) throw new Error(denied);
   const p = store.products.find(p => p.id === id);
   if (p) {
     const before = JSON.stringify(p);
@@ -921,7 +1013,9 @@ export type FreeSampleReceiptResult =
  * Receives supplier samples as inventory only: it never creates a purchase,
  * supplier payable, cash transaction, or sales revenue.
  */
-export function createFreeSampleReceipt(data: FreeSampleReceiptInput): FreeSampleReceiptResult {
+export function createFreeSampleReceipt(data: FreeSampleReceiptInput, actor?: User | null): FreeSampleReceiptResult {
+  const denied = checkPermission(actor, 'inventory.samples', 'batch');
+  if (denied) return { success: false, error: denied };
   const product = getProduct(data.product_id);
   if (!product) return { success: false, error: 'الدواء غير موجود' };
   const factor = getUnitConversionFactor(data.product_id, data.unit);
@@ -1001,7 +1095,9 @@ export interface OpeningStockInput {
 export type OpeningStockResult = { success: true; batch: Batch; base_quantity: number } | { success: false; error: string };
 
 /** Creates a physical opening batch without creating a purchase, payable, or cash movement. */
-export function createOpeningStock(data: OpeningStockInput): OpeningStockResult {
+export function createOpeningStock(data: OpeningStockInput, actor?: User | null): OpeningStockResult {
+  const denied = checkPermission(actor, 'inventory.opening', 'batch');
+  if (denied) return { success: false, error: denied };
   const product = getProduct(data.product_id);
   if (!product) return { success: false, error: 'الدواء غير موجود' };
   const factor = getUnitConversionFactor(data.product_id, data.unit);
@@ -1047,7 +1143,9 @@ export function canEditOpeningStock(batch_id: number): boolean {
 export function updateOpeningStock(data: {
   batch_id: number; base_quantity: number; unit_cost_per_base: number;
   batch_number?: string; expiry_date?: string;
-}): { success: true; batch: Batch } | { success: false; error: string } {
+}, actor?: User | null): { success: true; batch: Batch } | { success: false; error: string } {
+  const denied = checkPermission(actor, 'inventory.opening', 'batch');
+  if (denied) return { success: false, error: denied };
   const batch = store.batches.find(entry => entry.id === data.batch_id && entry.is_opening);
   const product = batch ? getProduct(batch.product_id) : null;
   if (!batch || !product) return { success: false, error: 'دفعة الرصيد الافتتاحي غير موجودة' };
@@ -1088,7 +1186,10 @@ export function configureProductPurchaseUnit(
   unit_name: string,
   conversion_factor: number,
   base_unit_name: string,
+  actor?: User | null,
 ): ProductUnit | null {
+  const denied = checkPermission(actor, 'inventory.edit', 'product');
+  if (denied) throw new Error(denied);
   const product = getProduct(product_id);
   const name = unit_name.trim();
   const base = base_unit_name.trim();
@@ -1140,7 +1241,9 @@ export function configureProductPurchaseUnit(
   return target;
 }
 
-export function replaceProductUnits(product_id: number, units: Omit<ProductUnit, 'id' | 'product_id'>[]): ProductUnit[] {
+export function replaceProductUnits(product_id: number, units: Omit<ProductUnit, 'id' | 'product_id'>[], actor?: User | null): ProductUnit[] {
+  const denied = checkPermission(actor, 'inventory.edit', 'product');
+  if (denied) throw new Error(denied);
   store.productUnits = store.productUnits.filter(u => u.product_id !== product_id);
   const saved = units.map(unit => addProductUnit({ ...unit, product_id }));
   addAuditLog({ action: 'PRODUCT_UNITS_UPDATE', entity: 'product', entity_id: product_id,
@@ -1478,7 +1581,11 @@ export interface SaleResult {
   error?: string;
 }
 
-export function createSale(data: NewSale): SaleResult {
+export function createSale(data: NewSale, actor?: User | null): SaleResult {
+  const saleDenied = checkPermission(actor, 'sales.create', 'sale')
+    ?? ((data.sale_type === 'credit' || data.sale_type === 'mixed') && data.customer_id
+      ? checkPermission(actor, 'customers.credit', 'sale') : null);
+  if (saleDenied) return { success: false, error: saleDenied };
   try {
     if (!data.items.length) return { success: false, error: 'أضف صنفًا واحدًا على الأقل' };
     if (!Number.isFinite(data.discount) || data.discount < 0 || !Number.isFinite(data.amount_paid) || data.amount_paid < 0) {
@@ -1706,7 +1813,9 @@ export function createSale(data: NewSale): SaleResult {
   }
 }
 
-export function cancelSale(id: number, reason: string, user_id?: number): void {
+export function cancelSale(id: number, reason: string, user_id?: number, actor?: User | null): void {
+  const denied = checkPermission(actor, 'sales.cancel', 'sale');
+  if (denied) throw new Error(denied);
   commitReturnAtomically(() => {
   const sale = store.sales.find(s => s.id === id);
   if (!sale || sale.cancelled || store.saleReturns.some(entry => entry.sale_id === id)) return;
@@ -1985,7 +2094,9 @@ export function createDirectPurchaseReturn(data: NewDirectPurchaseReturn): Retur
   }); } catch (e: any) { return { success: false, error: e?.message || 'تعذر ترحيل المرتجع المباشر' }; }
 }
 
-export function createSaleReturn(data: NewSaleReturn): ReturnResult<SaleReturn> {
+export function createSaleReturn(data: NewSaleReturn, actor?: User | null): ReturnResult<SaleReturn> {
+  const denied = checkPermission(actor, 'sales.return', 'sale_return');
+  if (denied) return { success: false, error: denied };
   if (data.idempotency_key) {
     const duplicate = store.saleReturns.find(entry => entry.idempotency_key === data.idempotency_key);
     if (duplicate) return { success: true, record: duplicate };
@@ -2138,7 +2249,9 @@ export interface PurchaseResult {
   error?: string;
 }
 
-export function createPurchase(data: NewPurchase): PurchaseResult {
+export function createPurchase(data: NewPurchase, actor?: User | null): PurchaseResult {
+  const denied = checkPermission(actor, 'purchases.create', 'purchase');
+  if (denied) return { success: false, error: denied };
   try {
     if (!data.items.length) return { success: false, error: 'أضف صنفًا واحدًا على الأقل' };
     if (!Number.isFinite(data.discount) || data.discount < 0 || !Number.isFinite(data.amount_paid) || data.amount_paid < 0) {
@@ -2320,7 +2433,9 @@ export function createPurchase(data: NewPurchase): PurchaseResult {
 }
 
 /** Safely cancel a purchase invoice, reversing stock and accounting only when its lot quantities remain available. */
-export function cancelPurchaseInvoice(id: number, reason: string, user_id?: number | null): { success: boolean; error?: string } {
+export function cancelPurchaseInvoice(id: number, reason: string, user_id?: number | null, actor?: User | null): { success: boolean; error?: string } {
+  const denied = checkPermission(actor, 'purchases.create', 'purchase');
+  if (denied) return { success: false, error: denied };
   const purchase = store.purchases.find(p => p.id === id);
   if (!purchase) return { success: false, error: 'فاتورة المشتريات غير موجودة' };
   if (purchase.cancelled) return { success: false, error: 'الفاتورة ملغاة بالفعل' };
@@ -2411,7 +2526,9 @@ export function getPurchaseReturn(id: number): PurchaseReturn | null {
 }
 
 /** Cancel a posted sales return by reversing its exact inventory and settlement effects. */
-export function cancelSaleReturn(id: number, reason: string, user_id?: number | null): ReturnResult<SaleReturn> {
+export function cancelSaleReturn(id: number, reason: string, user_id?: number | null, actor?: User | null): ReturnResult<SaleReturn> {
+  const denied = checkPermission(actor, 'sales.return', 'sale_return');
+  if (denied) return { success: false, error: denied };
   const record = store.saleReturns.find(entry => entry.id === id);
   if (!record) return { success: false, error: 'مرتجع المبيعات غير موجود' };
   if (record.status === 'CANCELLED') return { success: false, error: 'تم إلغاء هذا المرتجع سابقًا' };
@@ -2501,7 +2618,9 @@ export interface NewPurchaseReturn {
   idempotency_key?: string;
 }
 
-export function createPurchaseReturn(data: NewPurchaseReturn): ReturnResult<PurchaseReturn> {
+export function createPurchaseReturn(data: NewPurchaseReturn, actor?: User | null): ReturnResult<PurchaseReturn> {
+  const denied = checkPermission(actor, 'purchases.return', 'purchase_return');
+  if (denied) return { success: false, error: denied };
   if (data.idempotency_key) {
     const duplicate = store.purchaseReturns.find(entry => entry.idempotency_key === data.idempotency_key);
     if (duplicate) return { success: true, record: duplicate };
@@ -2616,7 +2735,9 @@ export function getCustomer(id: number): Customer | null {
 
 export function addCustomer(data: {
   name: string; phone?: string; address?: string; credit_limit?: number; opening_balance?: number; notes?: string;
-}): Customer {
+}, actor?: User | null): Customer {
+  const denied = checkPermission(actor, 'customers.manage', 'customer');
+  if (denied) throw new Error(denied);
   const openingBalance = Number(data.opening_balance ?? 0);
   if (!Number.isFinite(openingBalance) || openingBalance < 0) throw new Error('الرصيد الافتتاحي غير صالح');
   const customer: Customer = {
@@ -2638,18 +2759,24 @@ export function addCustomer(data: {
   return customer;
 }
 
-export function updateCustomer(id: number, data: Partial<Customer>): void {
+export function updateCustomer(id: number, data: Partial<Customer>, actor?: User | null): void {
+  const denied = checkPermission(actor, 'customers.manage', 'customer');
+  if (denied) throw new Error(denied);
   const c = store.customers.find(c => c.id === id);
   if (c) Object.assign(c, data);
   persistStore();
 }
 
-export function deleteCustomer(id: number): void {
+export function deleteCustomer(id: number, actor?: User | null): void {
+  const denied = checkPermission(actor, 'customers.manage', 'customer');
+  if (denied) throw new Error(denied);
   store.customers = store.customers.filter(c => c.id !== id);
   persistStore();
 }
 
-export function recordCustomerPayment(customer_id: number, amount: number, note?: string, cashbox_id: CashboxId = 'daily', payment_method = 'نقداً'): void {
+export function recordCustomerPayment(customer_id: number, amount: number, note?: string, cashbox_id: CashboxId = 'daily', payment_method = 'نقداً', actor?: User | null): void {
+  const denied = checkPermission(actor, 'customers.collect', 'customer');
+  if (denied) throw new Error(denied);
   if (!Number.isFinite(amount) || amount <= 0) throw new Error('مبلغ القبض غير صالح');
   const customer = store.customers.find(c => c.id === customer_id);
   if (!customer) throw new Error('العميل غير موجود');
@@ -3216,7 +3343,9 @@ export function applyStocktake(data: {
   counts: StocktakeCountInput[];
   user_id?: number | null;
   reason: string;
-}): { success: true; applied: number } | { success: false; error: string } {
+}, actor?: User | null): { success: true; applied: number } | { success: false; error: string } {
+  const denied = checkPermission(actor, 'inventory.adjust', 'batch');
+  if (denied) return { success: false, error: denied };
   if (!Array.isArray(data.counts) || data.counts.length === 0) {
     return { success: false, error: 'لا توجد كميات جرد لاعتمادها' };
   }
@@ -3267,7 +3396,9 @@ export function applyStocktake(data: {
 export function adjustStock(data: {
   product_id: number; batch_id: number; quantity_change: number;
   type: TransactionType; note: string; user_id?: number;
-}): { success: boolean; error?: string } {
+}, actor?: User | null): { success: boolean; error?: string } {
+  const denied = checkPermission(actor, 'inventory.adjust', 'batch');
+  if (denied) return { success: false, error: denied };
   const product = getProduct(data.product_id);
   const batch = store.batches.find(b => b.id === data.batch_id);
   if (!product || !batch || batch.product_id !== product.id) {
@@ -3398,7 +3529,9 @@ export interface BackupData {
   auditLogs: AuditLog[];
 }
 
-export function createBackup(): BackupData {
+export function createBackup(actor?: User | null): BackupData {
+  const denied = checkPermission(actor, 'system.backup', 'backup');
+  if (denied) throw new Error(denied);
   // Device-local access controls must never be exported to a shareable backup.
   const backupSettings = { ...store.settings };
   delete backupSettings.pin_code;
@@ -3486,7 +3619,9 @@ function recomputeCountersFromRestoredData(): void {
   invoiceCounter = Math.max(1000, maxInvoiceNumberFromSales());
 }
 
-export async function restoreBackup(data: BackupData): Promise<{ success: boolean; error?: string }> {
+export async function restoreBackup(data: BackupData, actor?: User | null): Promise<{ success: boolean; error?: string }> {
+  const denied = checkPermission(actor, 'system.backup', 'backup');
+  if (denied) return { success: false, error: denied };
   const collectionKeys = [
     'products', 'productUnits', 'batches', 'stockMovements', 'customers', 'suppliers',
     'sales', 'saleItems', 'saleBatchAllocations', 'saleReturns', 'purchases',
