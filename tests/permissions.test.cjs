@@ -183,7 +183,14 @@ test('denials change no data and are recorded in the audit log', () => {
   assert.equal(db.getSales().length, salesBefore);
   assert.equal(db.getUsers().length, usersBefore);
   assert.equal(deniedCount(), deniedBefore + 3);
-  const lastDenials = db.getAuditLogs().filter(log => log.action === 'PERMISSION_DENIED').slice(-3);
+  // getAuditLogs() sorts by second-precision created_at (newest first),
+  // so slice(-3) on it is timing-dependent when the tests straddle a
+  // second boundary. Order by the monotonic id instead: the three newest
+  // denials are exactly the ones this test just produced.
+  const lastDenials = db.getAuditLogs()
+    .filter(log => log.action === 'PERMISSION_DENIED')
+    .sort((a, b) => a.id - b.id)
+    .slice(-3);
   assert.deepEqual(lastDenials.map(log => log.reason), ['customers.credit', 'sales.cancel', 'system.users']);
 });
 

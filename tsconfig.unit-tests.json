@@ -17,6 +17,7 @@
     "services/employee-permissions.ts",
     "services/session.ts",
     "services/sqlite-store.ts",
+    "services/sqlite-typed.ts",
     "services/cloud-sync.ts",
     "services/customer-invoice.ts",
     "services/return-invoice.ts",
