@@ -16,6 +16,7 @@
     "services/erp-database.ts",
     "services/employee-permissions.ts",
     "services/session.ts",
+    "services/sqlite-store.ts",
     "services/customer-invoice.ts",
     "services/return-invoice.ts",
     "services/drug-catalog-utils.ts",

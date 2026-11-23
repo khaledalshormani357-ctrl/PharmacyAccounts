@@ -54,6 +54,16 @@ How the session is bound: after a cloud sign-in (`app/login.tsx`, including biom
 خريطة الصلاحيات في `services/employee-permissions.ts`: 25 صلاحية في 5 مجموعات وافتراضيات لكل دور، ويمكن منح تجاوز فردي من شاشة صلاحيات الموظفين. الفرض الحقيقي في طبقة الخدمات، والرفض يُسجَّل في التدقيق، وإخفاء الأزرار مجرد تلميح. الجلسة تُربط بالدخول السحابي عبر اسم المستخدم، والوضع المحلي بلا دخول يعتمد على PIN فقط.
 
 
+## Persistence (SQLite, Phase 1)
+
+On native devices the store is persisted in SQLite (`pharmacy.db`, see
+`services/sqlite-store.ts`): one row per entity row plus a `meta` table
+for counters and settings, with differential writes inside a single
+transaction per persist. On first launch an existing AsyncStorage
+snapshot is migrated once into SQLite and the legacy copy is kept as a
+rollback. On web and in unit tests the backend is still AsyncStorage.
+Full details, schema, migration and rollback: `docs/SQLITE_MIGRATION.md`.
+
 ## Main Dependencies
 
 - React Native: 0.79.4
