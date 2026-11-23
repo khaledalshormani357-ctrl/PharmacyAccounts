@@ -24,7 +24,7 @@ export default function AddProductScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { showAlert } = useAlert();
-  const { id, catalogSourceId: routeCatalogSourceId } = useLocalSearchParams<{ id?: string; catalogSourceId?: string }>();
+  const { id, catalogSourceId: routeCatalogSourceId, barcode: routeBarcode } = useLocalSearchParams<{ id?: string; catalogSourceId?: string; barcode?: string }>();
   const isEdit = !!id;
   const isCatalogImport = !isEdit && !!routeCatalogSourceId;
 
@@ -57,6 +57,12 @@ export default function AddProductScreen() {
   const [catalogItemReady, setCatalogItemReady] = useState(false);
   const [catalogUnitReviewRequired, setCatalogUnitReviewRequired] = useState(false);
   const [catalogUnitReviewConfirmed, setCatalogUnitReviewConfirmed] = useState(false);
+
+  // Barcode scanned from /barcode-scanner: prefill only when the field is empty.
+  React.useEffect(() => {
+    if (routeBarcode && !barcode) setBarcode(routeBarcode);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [routeBarcode]);
 
   // Load existing product if editing
   React.useEffect(() => {
@@ -294,7 +300,12 @@ export default function AddProductScreen() {
             </View>
             <View style={{ flex: 1 }}>
               <Text style={labelStyle}>الباركود</Text>
-              <TextInput style={inputStyle} value={barcode} onChangeText={setBarcode} placeholder="ادخل أو امسح" placeholderTextColor={theme.colors.textTertiary} keyboardType="numeric" />
+              <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
+                <TextInput style={[inputStyle, { flex: 1 }]} value={barcode} onChangeText={setBarcode} placeholder="ادخل أو امسح" placeholderTextColor={theme.colors.textTertiary} keyboardType="numeric" />
+                <TouchableOpacity onPress={() => router.push('/barcode-scanner?target=product')} accessibilityLabel="مسح باركود" style={{ width: 46, height: 46, borderRadius: 8, borderWidth: 1, borderColor: theme.colors.border, backgroundColor: theme.colors.surface, alignItems: 'center', justifyContent: 'center' }}>
+                  <MaterialIcons name="qr-code-scanner" size={20} color={theme.colors.primary} />
+                </TouchableOpacity>
+              </View>
             </View>
           </View>
 

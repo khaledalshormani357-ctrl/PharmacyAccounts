@@ -1,5 +1,5 @@
 // Smart Pharmacy ERP — POS (Point of Sale)
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, ScrollView,
   FlatList, Modal, KeyboardAvoidingView, Platform,
@@ -12,6 +12,7 @@ import { useTheme } from '@/contexts/ThemeContext';
 import {
   getProducts, getCustomers, createSale, getProductUnits, getUnitPrice,
   Product, Customer, getSetting, getProductStock, flushDatabaseWrites,
+  getProductByBarcode,
 } from '@/services/database';
 import { formatCurrency } from '@/constants/i18n';
 import { useAlert } from '@/template';
@@ -38,7 +39,7 @@ export default function PosScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { showAlert } = useAlert();
-  const params = useLocalSearchParams<{ type?: string }>();
+  const params = useLocalSearchParams<{ type?: string; barcode?: string }>();
 
   const [cart, setCart] = useState<CartItem[]>([]);
   const [saleType, setSaleType] = useState<'cash' | 'credit'>(
@@ -91,6 +92,23 @@ export default function PosScreen() {
       }, ...prev]);
     }
   };
+
+  // Barcode scanned from /barcode-scanner: add the matching product once.
+  const handledBarcodeRef = useRef<string | null>(null);
+  useEffect(() => {
+    const barcode = params.barcode;
+    if (!barcode || handledBarcodeRef.current === barcode) return;
+    handledBarcodeRef.current = barcode;
+    const product = getProductByBarcode(barcode);
+    if (product) {
+      addToCart(product);
+    } else {
+      showAlert('الباركود غير موجود', 'لا يوجد صنف بهذا الباركود في المخزون.');
+    }
+    // addToCart is intentionally not a dependency: it closes over the cart
+    // at scan time and this effect must run only once per scanned barcode.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [params.barcode]);
 
   const updateCartItem = (index: number, field: keyof CartItem, value: string) => {
     const updated = [...cart];
@@ -211,6 +229,9 @@ export default function PosScreen() {
               <MaterialIcons name="close" size={18} color={theme.colors.textTertiary} />
             </TouchableOpacity>
           )}
+          <TouchableOpacity onPress={() => router.push('/barcode-scanner?target=pos')} accessibilityLabel="مسح باركود">
+            <MaterialIcons name="qr-code-scanner" size={20} color={theme.colors.primary} />
+          </TouchableOpacity>
         </View>
 
         {/* Search Results */}

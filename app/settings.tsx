@@ -31,7 +31,7 @@ export default function SettingsScreen() {
   const [currencySymbol, setCurrencySymbol] = useState('ر.ي');
   const [pinEnabled, setPinEnabled] = useState(false);
   const [showPinSetup, setShowPinSetup] = useState(false);
-  const [pinAction, setPinAction] = useState<'setup' | 'change'>('setup');
+  const [pinAction, setPinAction] = useState<'set' | 'change' | 'disable'>('set');
   const [saved, setSaved] = useState(false);
   const [openingBalance, setOpeningBalance] = useState('');
   const [openingBalanceTotal, setOpeningBalanceTotal] = useState(0);
@@ -104,22 +104,30 @@ export default function SettingsScreen() {
 
   const handlePinToggle = (val: boolean) => {
     if (val) {
-      setPinAction('setup');
+      setPinAction('set');
       setShowPinSetup(true);
     } else {
-      showAlert('تعطيل قفل PIN', 'هل تريد تعطيل قفل PIN؟', [
-        { text: 'إلغاء', style: 'cancel' },
-        { text: 'تعطيل', style: 'destructive', onPress: () => { setSetting('pin_enabled', 'false'); setSetting('pin_code', ''); setPinEnabled(false); } },
-      ]);
+      // Disabling requires verifying the current PIN first, via PinSetup
+      // in 'disable' mode, instead of disabling directly from an alert.
+      setPinAction('disable');
+      setShowPinSetup(true);
     }
   };
 
-  const handlePinSaved = (pin: string) => {
-    setSetting('pin_code', pin);
-    setSetting('pin_enabled', 'true');
-    setPinEnabled(true);
-    setShowPinSetup(false);
-    showAlert('تم', 'تم تفعيل قفل PIN');
+  const handlePinComplete = (pin: string | null) => {
+    if (pin === null) {
+      setSetting('pin_code', '');
+      setSetting('pin_enabled', 'false');
+      setPinEnabled(false);
+      setShowPinSetup(false);
+      showAlert('تم', 'تم تعطيل قفل PIN');
+    } else {
+      setSetting('pin_code', pin);
+      setSetting('pin_enabled', 'true');
+      setPinEnabled(true);
+      setShowPinSetup(false);
+      showAlert('تم', 'تم تفعيل قفل PIN');
+    }
   };
 
   const inputStyle = { height: 46, borderRadius: 8, borderWidth: 1, borderColor: theme.colors.border, paddingHorizontal: 12, fontSize: 14, textAlign: 'right' as const, backgroundColor: theme.colors.surface, color: theme.colors.textPrimary };
@@ -249,9 +257,11 @@ export default function SettingsScreen() {
 
       {showPinSetup && (
         <PinSetup
-          onSave={handlePinSaved}
+          visible={showPinSetup}
+          mode={pinAction}
+          currentPin={getSetting('pin_code') || undefined}
+          onComplete={handlePinComplete}
           onCancel={() => setShowPinSetup(false)}
-          title={pinAction === 'change' ? 'تغيير رمز PIN' : 'إعداد رمز PIN'}
         />
       )}
     </View>

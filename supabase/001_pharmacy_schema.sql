@@ -149,6 +149,10 @@ with check (pharmacy_id = public.current_pharmacy_id());
 
 -- Create a profile automatically when an Auth user is created.
 -- The first user must be linked to a pharmacy by the bootstrap SQL below.
+-- The role is never taken from raw_user_meta_data: every new profile is
+-- 'CASHIER' and promotion happens only through an administrator. Disable
+-- self-registration by email in the Supabase dashboard (Authentication >
+-- Providers > Email) so untrusted sign-ups cannot create accounts at all.
 create or replace function public.handle_new_auth_user()
 returns trigger
 language plpgsql
@@ -157,10 +161,8 @@ set search_path = public
 as $$
 declare
   target_pharmacy uuid;
-  requested_role public.pharmacy_role;
 begin
   target_pharmacy := nullif(new.raw_user_meta_data->>'pharmacy_id', '')::uuid;
-  requested_role := coalesce(nullif(new.raw_user_meta_data->>'role', '')::public.pharmacy_role, 'CASHIER');
   if target_pharmacy is not null then
     insert into public.pharmacy_profiles (id, pharmacy_id, username, full_name, role)
     values (
@@ -168,7 +170,7 @@ begin
       target_pharmacy,
       coalesce(nullif(new.raw_user_meta_data->>'username', ''), split_part(new.email, '@', 1)),
       coalesce(nullif(new.raw_user_meta_data->>'full_name', ''), split_part(new.email, '@', 1)),
-      requested_role
+      'CASHIER'
     )
     on conflict (id) do update set
       username = excluded.username,

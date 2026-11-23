@@ -1,39 +1,47 @@
-# Welcome to OnSpace AI
+# PharmacyAccounts — نظام ERP للصيدليات
 
-Onspace AI empowers anyone to turn ideas into powerful AI applications in minutes—no coding required. Our free, no-code platform enables effortless creation of custom AI apps; simply describe your vision and our agentic AI handles the rest. The onspace-app, built with React Native and Expo, demonstrates this capability—integrating popular third-party libraries to deliver seamless cross-platform performance across iOS, Android, and Web environments.
+PharmacyAccounts is a pharmacy ERP app (React Native + Expo) for daily pharmacy work: point of sale (POS), purchases, inventory with batches and expiry tracking, sale/purchase returns, a cashbox split into three boxes (Daily, Pharmacy, Bank/Exchange), customers and suppliers with credit limits and balances, PDF reports, and a shared drug reference catalog. Data is stored locally on the device, so the app works offline after the first sync/download of the catalog.
+
+نظام محاسبة ومخزون للصيدليات: نقطة بيع، مشتريات، مخزون بدفعات وتواريخ صلاحية، مرتجعات، صندوق بثلاثة صناديق، عملاء وموردون، تقارير PDF، وكتالوج أدوية مشترك. يعمل محلياً دون اتصال بعد أول مزامنة.
 
 ## Getting Started
 
 ### 1. Install Dependencies
 
 ```bash
-npm install
-# or
-yarn install
+pnpm install
 ```
+
+Copy `.env.example` to `.env` and fill in the Supabase URL and publishable/anon key. Never put the service_role key in the app.
 
 ### 2. Start the Project
 
 - Start the development server (choose your platform):
 
 ```bash
-npm run start         # Start Expo development server
-npm run android       # Launch Android emulator
-npm run ios           # Launch iOS simulator
-npm run web           # Start the web version
+pnpm start         # Start Expo development server
+pnpm android       # Launch Android emulator
+pnpm ios           # Launch iOS simulator
+pnpm web           # Start the web version
 ```
 
 - Reset the project (clear cache, etc.):
 
 ```bash
-npm run reset-project
+pnpm run reset-project
 ```
 
-### 3. Lint the Code
+### 3. Test and Typecheck
 
 ```bash
-npm run lint
+pnpm test           # Unit tests (pnpm run test:units)
+pnpm run typecheck  # tsc --noEmit
+pnpm run lint
 ```
+
+## Security note
+
+`.env` is not tracked in git (see `.gitignore`); only `.env.example` is committed. Because a previous `.env` was tracked, rotate the Supabase anon/publishable key in the Supabase dashboard and update the devices. SQL migrations under `supabase/` are applied manually in the Supabase SQL Editor — they are not applied automatically by the app.
 
 ## Main Dependencies
 
