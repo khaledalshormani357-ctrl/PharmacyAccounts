@@ -585,9 +585,18 @@ export async function flushDatabaseWrites(): Promise<void> {
   await persistQueue;
 }
 
+let lastCorruptSnapshotKey: string | null = null;
+
+/** Key of the most recent corrupt snapshot preserved in storage, if any. */
+export function getLastCorruptSnapshotKey(): string | null {
+  return lastCorruptSnapshotKey;
+}
+
 async function hydrateStore(): Promise<void> {
+  // Keep `raw` outside the try so a JSON.parse failure can still preserve it.
+  let raw: string | null = null;
   try {
-    const raw = await AsyncStorage.getItem(STORE_KEY);
+    raw = await AsyncStorage.getItem(STORE_KEY);
     if (!raw) return;
     const saved = JSON.parse(raw) as { store?: typeof store; ids?: typeof ids; invoiceCounter?: number };
     if (saved.store) {
@@ -600,6 +609,19 @@ async function hydrateStore(): Promise<void> {
     if (typeof saved.invoiceCounter === 'number') invoiceCounter = saved.invoiceCounter;
   } catch {
     // A corrupt local snapshot must not prevent the app from opening.
+    // Preserve the damaged text under a unique timestamped key (never
+    // overwritten) so it can be inspected/recovered, then continue with
+    // the in-memory defaults already initialised by initDefaults().
+    if (raw) {
+      const corruptKey = `${STORE_KEY}/corrupt-${Date.now()}`;
+      lastCorruptSnapshotKey = corruptKey;
+      try {
+        await AsyncStorage.setItem(corruptKey, raw);
+      } catch {
+        // Preserving the corrupt snapshot is best-effort; the app must
+        // still open with defaults even if storage is unavailable.
+      }
+    }
   }
   // Migrate the former built-in Saudi currency default to the requested Yemeni rial.
   // Preserve any non-default currency explicitly chosen by the pharmacy.
@@ -1416,6 +1438,16 @@ function allocateFefo(product_id: number, quantityNeeded: number, reserved: Map<
   return allocations;
 }
 
+/** Check whether an additional credit amount would exceed a customer's limit. Returns null when the customer does not exist. A limit of 0 (or less) means no limit. */
+export function checkCreditLimit(customer_id: number, additionalAmount: number): { allowed: boolean; balance: number; credit_limit: number; projected: number } | null {
+  const customer = store.customers.find(c => c.id === customer_id);
+  if (!customer) return null;
+  const balance = customer.balance;
+  const credit_limit = customer.credit_limit;
+  const projected = balance + additionalAmount;
+  return { allowed: credit_limit <= 0 || projected <= credit_limit, balance, credit_limit, projected };
+}
+
 // ═══════════════════════════════════════════════════════════
 // SALES — ATOMIC
 // ═══════════════════════════════════════════════════════════
@@ -1492,6 +1524,14 @@ export function createSale(data: NewSale): SaleResult {
     const saleDate = data.date || today();
     if (!isValidIsoDate(saleDate)) return { success: false, error: 'تاريخ فاتورة البيع غير صحيح' };
     if (!Number.isFinite(data.amount_paid) || data.amount_paid < 0) return { success: false, error: 'المبلغ المدفوع غير صحيح' };
+    // Credit limit: refuse a credit/mixed sale whose remaining balance would
+    // push the customer over their limit. Checked before any mutation.
+    if ((data.sale_type === 'credit' || data.sale_type === 'mixed') && data.customer_id) {
+      const limitCheck = checkCreditLimit(data.customer_id, remaining);
+      if (limitCheck && limitCheck.credit_limit > 0 && !limitCheck.allowed) {
+        return { success: false, error: 'تجاوز حد الائتمان للعميل: الرصيد الحالي + المتبقي من هذه الفاتورة يتجاوز الحد المسموح' };
+      }
+    }
     // Commit invoice, inventory, balances, cash and audit as one rollback-capable mutation.
     return commitReturnAtomically(() => {
     // Create sale record
@@ -2594,16 +2634,19 @@ export function addCustomer(data: {
     store.customerTransactions.push({ id: ids.customerTx++, customer_id: customer.id, type: 'adjustment', amount: openingBalance, balance_after: openingBalance, reference_id: null, note: 'رصيد افتتاحي — دين سابق', date: today(), created_at: now() });
     addAuditLog({ action: 'CUSTOMER_OPENING_BALANCE', entity: 'customer', entity_id: customer.id, after_data: JSON.stringify({ openingBalance }) });
   }
+  persistStore();
   return customer;
 }
 
 export function updateCustomer(id: number, data: Partial<Customer>): void {
   const c = store.customers.find(c => c.id === id);
   if (c) Object.assign(c, data);
+  persistStore();
 }
 
 export function deleteCustomer(id: number): void {
   store.customers = store.customers.filter(c => c.id !== id);
+  persistStore();
 }
 
 export function recordCustomerPayment(customer_id: number, amount: number, note?: string, cashbox_id: CashboxId = 'daily', payment_method = 'نقداً'): void {
@@ -3330,6 +3373,10 @@ export interface BackupData {
   created_at: string;
   pharmacy_name: string;
   settings: Record<string, string>;
+  /** Next-id counters, so a restore does not reuse identifiers. Optional in older backups. */
+  ids?: Record<string, number>;
+  /** Last invoice counter value (the number inside INV-######). Optional in older backups. */
+  invoice_counter?: number;
   products: Product[];
   productUnits: ProductUnit[];
   batches: Batch[];
@@ -3361,6 +3408,8 @@ export function createBackup(): BackupData {
     created_at: now(),
     pharmacy_name: store.settings['pharmacy_name'] || '',
     settings: backupSettings,
+    ids: { ...ids },
+    invoice_counter: invoiceCounter,
     products: [...store.products],
     productUnits: [...store.productUnits],
     batches: [...store.batches],
@@ -3381,6 +3430,60 @@ export function createBackup(): BackupData {
     supplierTransactions: [...store.supplierTransactions],
     auditLogs: [...store.auditLogs],
   };
+}
+
+function isPositiveInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value > 0;
+}
+
+function maxIdOf(rows: readonly { id: number }[] | undefined): number {
+  if (!rows) return 0;
+  return rows.reduce((max, row) => (typeof row?.id === 'number' && Number.isFinite(row.id) ? Math.max(max, row.id) : max), 0);
+}
+
+function maxInvoiceNumberFromSales(): number {
+  let max = 0;
+  for (const sale of store.sales) {
+    const match = /^INV-(\d+)$/.exec(sale.invoice_number || '');
+    if (match) max = Math.max(max, parseInt(match[1], 10));
+  }
+  return max;
+}
+
+/**
+ * Recompute every next-id counter from the restored collections (max(id) + 1)
+ * and set the invoice counter to at least the largest INV-###### in the
+ * restored sales. Used when a backup carries no (or invalid) counters.
+ * Nested return-item ids are recomputed from the items embedded in returns.
+ */
+function recomputeCountersFromRestoredData(): void {
+  const counterFor: [keyof typeof ids, readonly { id: number }[]][] = [
+    ['products', store.products],
+    ['productUnits', store.productUnits],
+    ['batches', store.batches],
+    ['stockMovements', store.stockMovements],
+    ['customers', store.customers],
+    ['suppliers', store.suppliers],
+    ['sales', store.sales],
+    ['saleItems', store.saleItems],
+    ['saleAllocations', store.saleBatchAllocations],
+    ['saleReturns', store.saleReturns],
+    ['purchases', store.purchases],
+    ['purchaseItems', store.purchaseItems],
+    ['purchaseReturns', store.purchaseReturns],
+    ['expenses', store.expenses],
+    ['cashTx', store.cashTransactions],
+    ['shifts', store.shifts],
+    ['customerTx', store.customerTransactions],
+    ['supplierTx', store.supplierTransactions],
+    ['auditLogs', store.auditLogs],
+  ];
+  for (const [counter, rows] of counterFor) {
+    ids[counter] = maxIdOf(rows) + 1;
+  }
+  ids.saleReturnItems = store.saleReturns.flatMap(entry => entry.items || []).reduce((max, item) => Math.max(max, item.id || 0), 0) + 1;
+  ids.purchaseReturnItems = store.purchaseReturns.flatMap(entry => entry.items || []).reduce((max, item) => Math.max(max, item.id || 0), 0) + 1;
+  invoiceCounter = Math.max(1000, maxInvoiceNumberFromSales());
 }
 
 export async function restoreBackup(data: BackupData): Promise<{ success: boolean; error?: string }> {
@@ -3413,6 +3516,8 @@ export async function restoreBackup(data: BackupData): Promise<{ success: boolea
   }
 
   const previousStore = JSON.parse(JSON.stringify(store)) as typeof store;
+  const previousIds = { ...ids };
+  const previousInvoiceCounter = invoiceCounter;
   try {
     // A backup may restore business settings, but cannot replace this device's PIN state.
     const safeSettings = { ...(data.settings || {}) };
@@ -3438,8 +3543,29 @@ export async function restoreBackup(data: BackupData): Promise<{ success: boolea
     store.customerTransactions = data.customerTransactions || [];
     store.supplierTransactions = data.supplierTransactions || [];
     store.auditLogs = data.auditLogs || [];
+    // Restore the next-id counters when the backup carries them (and every
+    // supplied value is a known, positive integer); otherwise recompute
+    // each counter from max(id) + 1 of the restored collections. The
+    // invoice counter is likewise restored when valid, else set to at
+    // least the largest INV-###### among the restored sales.
+    const suppliedIds = data.ids;
+    const hasValidIds = !!suppliedIds && typeof suppliedIds === 'object' && !Array.isArray(suppliedIds)
+      && Object.entries(suppliedIds).every(([key, value]) => key in ids && isPositiveInteger(value));
+    if (hasValidIds) {
+      Object.assign(ids, suppliedIds);
+    } else {
+      recomputeCountersFromRestoredData();
+    }
+    if (isPositiveInteger(data.invoice_counter)) {
+      invoiceCounter = data.invoice_counter;
+    } else if (hasValidIds) {
+      invoiceCounter = Math.max(invoiceCounter, maxInvoiceNumberFromSales());
+    }
+    // Persist the restored counters (and the RESTORE audit entry below)
+    // before reporting success.
     addAuditLog({ action: 'RESTORE', entity: 'backup', entity_id: null,
       after_data: JSON.stringify({ from: data.created_at }) });
+    persistStore();
     // Do not report a successful restore until the resulting snapshot is durable.
     await flushDatabaseWrites();
     return { success: true };
@@ -3447,6 +3573,8 @@ export async function restoreBackup(data: BackupData): Promise<{ success: boolea
     Object.keys(previousStore).forEach(key => {
       (store as any)[key] = (previousStore as any)[key];
     });
+    Object.assign(ids, previousIds);
+    invoiceCounter = previousInvoiceCounter;
     return { success: false, error: e?.message || 'فشلت الاستعادة' };
   }
 }
