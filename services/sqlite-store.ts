@@ -93,6 +93,10 @@ export const COLLECTION_NAMES = [
   'shifts',
   'expenses',
   'auditLogs',
+  // Outbox of local changes waiting for cloud sync (services/cloud-sync.ts).
+  // It is a collection like any other so it survives restarts, but the
+  // outbox builder in erp-database never records entries about itself.
+  'syncOutbox',
 ] as const;
 
 export const STORE_KEY = '@pharmacy_accounts/store/v1';

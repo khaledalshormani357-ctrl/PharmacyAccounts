@@ -64,6 +64,19 @@ snapshot is migrated once into SQLite and the legacy copy is kept as a
 rollback. On web and in unit tests the backend is still AsyncStorage.
 Full details, schema, migration and rollback: `docs/SQLITE_MIGRATION.md`.
 
+## Cloud sync (manual, Phase 1)
+
+Settings > «المزامنة السحابية» offers a manual **«مزامنة الآن»** button:
+the local outbox is pushed to Supabase (`supabase/006_cloud_sync.sql`,
+apply it manually in the dashboard after 001–005), then newer remote
+rows are pulled. Every row carries a global `syncId` (remote
+`client_id`); the local numeric `id` never leaves the device.
+Conflicts resolve per whole row, last-write-wins on `updatedAt`, ties
+broken by the larger device id. Local user accounts are never synced,
+invoice numbers stay per-device, and there is no Realtime or
+background sync yet. Full details, activation steps and known limits:
+`docs/CLOUD_SYNC.md`.
+
 ## Main Dependencies
 
 - React Native: 0.79.4
