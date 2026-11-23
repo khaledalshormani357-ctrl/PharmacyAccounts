@@ -13,6 +13,12 @@
 // - Writes are differential: `diffSnapshots` compares serialised rows and
 //   only changed/new/deleted rows (plus changed meta) are written, inside
 //   one SQLite transaction.
+// - Phase 2 (services/sqlite-typed.ts): the expo-sqlite adapter mirrors
+//   each diff into typed tables in the *same* transaction (dual-write),
+//   after running the v2 migration if the database is still at v1. The
+//   AsyncStorage and InMemory adapters have no SQLite behind them, so
+//   they ignore the typed tables entirely; reads then fall back to the
+//   in-memory store.
 // - `expo-sqlite` is never imported statically here. The native module is
 //   loaded lazily (dynamic import through a variable, so the TypeScript
 //   unit-test build does not need the module to exist), and the platform is
@@ -28,6 +34,15 @@
 // on a helper that may differ between versions.
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import {
+  applyDiffToGenericTables,
+  applyDiffToTypedTables,
+  applySnapshotToGenericTables,
+  buildTypedSchemaSql,
+  migrateToTypedTables,
+  rebuildTypedTablesFromRows,
+  type TypedDb,
+} from './sqlite-typed';
 
 // ─── Types ──────────────────────────────────────────────────────────
 
@@ -65,6 +80,10 @@ export interface PersistenceAdapter {
   saveDiff?(diff: SnapshotDiff): Promise<void>;
   /** Read one adapter-level meta flag (e.g. `migrated_from_asyncstorage`). */
   getMeta?(key: string): Promise<string | null>;
+  /** Typed-table access (Phase 2). Adapters without SQLite return null/false. */
+  getTypedDb?(): Promise<TypedDb | null>;
+  /** Create the typed tables if needed and run the v2 migration. */
+  ensureTypedTables?(): Promise<boolean>;
 }
 
 // ─── Store shape ────────────────────────────────────────────────────
@@ -101,7 +120,7 @@ export const COLLECTION_NAMES = [
 
 export const STORE_KEY = '@pharmacy_accounts/store/v1';
 export const DATABASE_FILE_NAME = 'pharmacy.db';
-export const SCHEMA_VERSION = '1';
+export const SCHEMA_VERSION = '2';
 export const MIGRATED_FROM_ASYNC_STORAGE_KEY = 'migrated_from_asyncstorage';
 
 /** An empty store with every collection present, so a round-trip never
@@ -347,6 +366,17 @@ interface ExpoSQLiteDb {
 export class ExpoSqliteAdapter implements PersistenceAdapter {
   readonly name = 'expo-sqlite';
   private dbPromise: Promise<ExpoSQLiteDb> | null = null;
+  private typedReady = false;
+
+  /** Adapt an expo-sqlite handle to the TypedDb surface. */
+  private typedDb(db: ExpoSQLiteDb): TypedDb {
+    return {
+      exec: (sql: string) => db.execAsync(sql),
+      run: (sql: string, params?: unknown[]) => db.runAsync(sql, params),
+      all: <T>(sql: string, params?: unknown[]) => db.getAllAsync<T>(sql, params),
+      get: <T>(sql: string, params?: unknown[]) => db.getFirstAsync<T>(sql, params),
+    };
+  }
 
   private async ensureDb(): Promise<ExpoSQLiteDb> {
     if (!this.dbPromise) {
@@ -371,6 +401,10 @@ export class ExpoSqliteAdapter implements PersistenceAdapter {
           // No foreign keys exist in this schema yet; advisory only.
         }
         await db.execAsync(buildSchemaSql());
+        // Phase 2 typed tables are created alongside the generic ones;
+        // existing rows are copied into them by the v2 migration, which
+        // runs lazily on the first typed access or the next write.
+        await db.execAsync(buildTypedSchemaSql());
         return db;
       })();
       // Allow a later retry after a failed open instead of caching the
@@ -415,44 +449,50 @@ export class ExpoSqliteAdapter implements PersistenceAdapter {
   async saveSnapshot(snapshot: StoredSnapshot): Promise<void> {
     const rows = snapshotToRows(snapshot);
     const db = await this.ensureDb();
+    const typed = this.typedDb(db);
     await this.withTransaction(db, async () => {
-      await db.runAsync('DELETE FROM collections');
-      for (const row of rows.rows) {
-        await db.runAsync(
-          'INSERT OR REPLACE INTO collections (collection, row_id, data) VALUES (?, ?, ?)',
-          [row.collection, row.rowId, row.data],
-        );
-      }
-      // Upsert only the keys this snapshot owns; other meta keys (e.g.
-      // the one-time migration flag) are preserved.
-      for (const [key, value] of rows.meta) {
-        await db.runAsync('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)', [key, value]);
-      }
+      // A v1 database is migrated first, inside this same transaction,
+      // so the generic and typed tables can never disagree afterwards.
+      await migrateToTypedTables(typed, { inTransaction: true });
+      await applySnapshotToGenericTables(typed, rows);
+      await rebuildTypedTablesFromRows(typed, rows);
+      this.typedReady = true;
     });
   }
 
   async saveDiff(diff: SnapshotDiff): Promise<void> {
     const db = await this.ensureDb();
+    const typed = this.typedDb(db);
     await this.withTransaction(db, async () => {
-      for (const row of diff.upserts) {
-        await db.runAsync(
-          'INSERT OR REPLACE INTO collections (collection, row_id, data) VALUES (?, ?, ?)',
-          [row.collection, row.rowId, row.data],
-        );
-      }
-      for (const d of diff.deletes) {
-        await db.runAsync('DELETE FROM collections WHERE collection = ? AND row_id = ?', [
-          d.collection,
-          d.rowId,
-        ]);
-      }
-      for (const [key, value] of diff.metaUpserts) {
-        await db.runAsync('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)', [key, value]);
-      }
-      for (const key of diff.metaDeletes) {
-        await db.runAsync('DELETE FROM meta WHERE key = ?', [key]);
-      }
+      // Migrate first (no-op once at v2), then mirror the same diff
+      // into the generic tables and the typed tables in one transaction.
+      await migrateToTypedTables(typed, { inTransaction: true });
+      await applyDiffToGenericTables(typed, diff);
+      await applyDiffToTypedTables(typed, diff);
+      this.typedReady = true;
     });
+  }
+
+  async getTypedDb(): Promise<TypedDb | null> {
+    try {
+      const db = await this.ensureDb();
+      return this.typedDb(db);
+    } catch {
+      return null;
+    }
+  }
+
+  /** Run the v2 migration (a no-op once at v2) and report readiness. */
+  async ensureTypedTables(): Promise<boolean> {
+    if (this.typedReady) return true;
+    try {
+      const db = await this.ensureDb();
+      await migrateToTypedTables(this.typedDb(db));
+      this.typedReady = true;
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   async getMeta(key: string): Promise<string | null> {

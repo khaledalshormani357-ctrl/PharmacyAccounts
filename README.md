@@ -64,6 +64,22 @@ snapshot is migrated once into SQLite and the legacy copy is kept as a
 rollback. On web and in unit tests the backend is still AsyncStorage.
 Full details, schema, migration and rollback: `docs/SQLITE_MIGRATION.md`.
 
+## Persistence (SQLite, Phase 2 — typed tables and SQL reads)
+
+Phase 2 adds typed tables for the hot collections
+(`services/sqlite-typed.ts`, `SCHEMA_VERSION = '2'`) with indexes on
+`product_id`, `expiry_date` and `date`, migrated once from the generic
+tables (the generic tables are kept as the rollback source). Every
+write is mirrored into the typed tables inside the same transaction
+(dual-write). FEFO allocation, low-stock/expiry queries, sales and
+report summaries and dashboard KPIs are available as SQL queries
+(`allocateFefo`, `getLowStock`, `getSalesSummary`,
+`getReportSummarySql`, `getDashboardKpisSql`, …) behind new `*Async`
+variants in `erp-database.ts` that fall back to the in-memory
+computation on any failure; the synchronous read functions and the
+write path are unchanged. Full details: `docs/SQLITE_MIGRATION.md`
+(«Phase 2» section).
+
 ## Cloud sync (manual, Phase 1)
 
 Settings > «المزامنة السحابية» offers a manual **«مزامنة الآن»** button:

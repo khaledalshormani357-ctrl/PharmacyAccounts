@@ -17,6 +17,13 @@ import {
   type SnapshotRows,
   type StoredSnapshot,
 } from './sqlite-store';
+import {
+  getDashboardKpisSql,
+  getExpiryRadarSql,
+  getInventoryListSql,
+  getReportSummarySql,
+  type TypedDb,
+} from './sqlite-typed';
 
 // ═══════════════════════════════════════════════════════════
 // TYPES & INTERFACES
@@ -630,6 +637,8 @@ export function setPersistenceBackend(adapter: PersistenceAdapter): void {
   persistenceBackend = adapter;
   lastSavedRows = null;
   migrationStatus.migratedFromAsyncStorage = false;
+  typedStoreReady = null;
+  typedSchemaVersion = null;
 }
 
 export function getPersistenceBackendName(): string {
@@ -657,6 +666,113 @@ function takeSnapshotRows(): SnapshotRows {
     invoiceCounter,
   };
   return snapshotToRows(snapshot);
+}
+
+// ─── Typed store (Phase 2: SQLite) ────────────────────────────────
+// The public read functions below stay synchronous and keep computing
+// from the in-memory store — expo-sqlite is async, so a synchronous
+// function cannot query it without changing its signature. The `*Async`
+// variants next to them prefer the SQL query layer when the typed
+// tables are ready and fall back to the in-memory computation on any
+// failure (wrong backend, migration not run, SQL error), so a read can
+// never fail because of the typed store. The cached readiness flag is
+// reset whenever the backend is swapped.
+//
+// Note: erp-database.ts must never import node:sqlite or expo-sqlite;
+// the adapter owns the database handle and hands out a TypedDb.
+
+let typedStoreReady: boolean | null = null;
+let typedSchemaVersion: string | null = null;
+
+/** Run the v2 migration if needed and report whether SQL reads are usable. */
+export async function ensureTypedStoreReady(): Promise<boolean> {
+  if (typedStoreReady === true) return true;
+  try {
+    const ensure = persistenceBackend.ensureTypedTables;
+    if (typeof ensure !== 'function') {
+      typedStoreReady = false;
+      return false;
+    }
+    const ready = await ensure.call(persistenceBackend);
+    typedStoreReady = ready;
+    if (ready) {
+      const version = await persistenceBackend.getMeta?.('schema_version');
+      typedSchemaVersion = typeof version === 'string' ? version : null;
+    }
+    return ready;
+  } catch {
+    typedStoreReady = false;
+    return false;
+  }
+}
+
+/** Cached typed-store readiness (false until ensureTypedStoreReady() succeeds). */
+export function isTypedStoreReady(): boolean {
+  return typedStoreReady === true;
+}
+
+/** Typed-store readiness and schema version, for tests and system-tools. */
+export function getTypedStoreStatus(): { ready: boolean; schemaVersion: string | null } {
+  return { ready: typedStoreReady === true, schemaVersion: typedSchemaVersion };
+}
+
+/** Run a query against the typed tables, or return null to use the
+ * in-memory fallback. Any failure is swallowed (and warned about) here
+ * so SQL problems can never break a read. */
+async function withTypedDb<T>(query: (db: TypedDb) => Promise<T>): Promise<T | null> {
+  try {
+    if (!(await ensureTypedStoreReady())) return null;
+    const getDb = persistenceBackend.getTypedDb;
+    if (typeof getDb !== 'function') return null;
+    const db = await getDb.call(persistenceBackend);
+    if (!db) return null;
+    return await query(db);
+  } catch (error) {
+    console.warn('[typed-store] SQL read failed, using in-memory fallback', error);
+    return null;
+  }
+}
+
+/** getDashboardKpis, preferring SQL for the SQL-computable fields. */
+export async function getDashboardKpisAsync(): Promise<DashboardKpis> {
+  const base = getDashboardKpis();
+  const sql = await withTypedDb(db => getDashboardKpisSql(db, today()));
+  if (!sql) return base;
+  return {
+    ...base,
+    todaySales: sql.todaySales,
+    todayCashSales: sql.todayCashSales,
+    todayCreditSales: sql.todayCreditSales,
+    lowStockCount: sql.lowStockCount,
+    expiringCount: sql.expiringCount,
+    expiredCount: sql.expiredCount,
+    outOfStockCount: sql.outOfStockCount,
+  };
+}
+
+/** getReportSummary, preferring the full SQL computation when ready. */
+export async function getReportSummaryAsync(dateFrom: string, dateTo: string): Promise<ReportSummary> {
+  const sql = await withTypedDb(db => getReportSummarySql(db, dateFrom, dateTo));
+  return sql ?? getReportSummary(dateFrom, dateTo);
+}
+
+/** getExpiryRadar, preferring SQL when the typed store is ready. */
+export async function getExpiryRadarAsync(): Promise<ExpiryRadarItem[]> {
+  const sql = await withTypedDb(db => getExpiryRadarSql(db, { today: today() }));
+  return sql ?? getExpiryRadar();
+}
+
+/** getInventoryList, preferring SQL when the typed store is ready. */
+export async function getInventoryListAsync(opts?: {
+  search?: string; status?: string; category?: string;
+}): Promise<InventoryItem[]> {
+  const sql = await withTypedDb(db => getInventoryListSql(db, opts, { today: today() }));
+  return sql ?? getInventoryList(opts);
+}
+
+/** Inventory items with status 'low', preferring SQL when ready. */
+export async function getLowStockProductsAsync(): Promise<InventoryItem[]> {
+  return getInventoryListAsync({ status: 'low' });
 }
 
 // ─── Cloud sync: identity, device, outbox ─────────────────────────
