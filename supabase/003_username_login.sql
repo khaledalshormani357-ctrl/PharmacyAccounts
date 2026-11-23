@@ -174,7 +174,33 @@ begin
 end;
 $$;
 
+create or replace function public.clear_username_login_failures(
+  p_key_hashes text[]
+)
+returns void
+language plpgsql
+security definer
+set search_path = pg_catalog, pharmacy_private
+as $$
+declare
+  v_key text;
+begin
+  if auth.role() is distinct from 'service_role' then
+    raise exception 'forbidden' using errcode = '42501';
+  end if;
+  foreach v_key in array coalesce(p_key_hashes, array[]::text[]) loop
+    if v_key !~ '^[0-9a-f]{64}$' then
+      raise exception 'invalid rate-limit key' using errcode = '22023';
+    end if;
+  end loop;
+  delete from pharmacy_private.username_login_attempts
+    where key_hash = any (coalesce(p_key_hashes, array[]::text[]));
+end;
+$$;
+
 revoke all on function public.check_username_login_rate_limit(text[], integer[], integer) from public, anon, authenticated;
 revoke all on function public.record_username_login_failure(text[], integer) from public, anon, authenticated;
+revoke all on function public.clear_username_login_failures(text[]) from public, anon, authenticated;
 grant execute on function public.check_username_login_rate_limit(text[], integer[], integer) to service_role;
 grant execute on function public.record_username_login_failure(text[], integer) to service_role;
+grant execute on function public.clear_username_login_failures(text[]) to service_role;

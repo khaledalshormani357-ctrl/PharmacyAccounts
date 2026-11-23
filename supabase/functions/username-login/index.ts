@@ -1,6 +1,10 @@
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import { isEmailLoginIdentifier, isValidLoginIdentifier, normalizeLoginIdentifier } from './login-utils.ts';
 
+// CORS stays permissive on purpose: mobile apps have no fixed Origin, so
+// an allow-listed Origin would not authenticate the caller anyway. This
+// function authenticates the submitted password itself and applies
+// server-side rate limits; the Origin header is not a security boundary.
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
@@ -84,10 +88,13 @@ Deno.serve(async (request: Request) => {
       auth: { autoRefreshToken: false, persistSession: false },
     });
     const clientIp = getClientIp(request);
-    const keyHashes = [await hmacHex(serviceRoleKey, `username:${identifier}`)];
+    // Prefer a dedicated HMAC secret for rate-limit keys; fall back to the
+    // service-role key only when USERNAME_LOGIN_RATE_LIMIT_SECRET is unset.
+    const rateLimitSecret = Deno.env.get('USERNAME_LOGIN_RATE_LIMIT_SECRET') || serviceRoleKey;
+    const keyHashes = [await hmacHex(rateLimitSecret, `username:${identifier}`)];
     const limits = [USER_FAILURE_LIMIT];
     if (clientIp) {
-      keyHashes.push(await hmacHex(serviceRoleKey, `ip:${clientIp}`));
+      keyHashes.push(await hmacHex(rateLimitSecret, `ip:${clientIp}`));
       limits.push(IP_FAILURE_LIMIT);
     }
 
@@ -126,6 +133,14 @@ Deno.serve(async (request: Request) => {
     if (authError || !authData.session) {
       await recordFailure(admin, keyHashes);
       return response({ error: 'invalid_credentials' }, 401);
+    }
+
+    // A successful login clears the accumulated failures for these keys.
+    // Best-effort: a failure to clear must not fail the login itself.
+    try {
+      await admin.rpc('clear_username_login_failures', { p_key_hashes: keyHashes });
+    } catch {
+      // Ignore: the session below is already valid.
     }
 
     return response({
