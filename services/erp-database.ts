@@ -5,6 +5,16 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { toBaseQuantity, priceForUnit, isValidIsoDate, isValidUnitQuantity } from './unit-conversion';
 import { withAtomicMutation } from './atomic-store';
 import { isPermissionAllowed } from './employee-permissions';
+import {
+  AsyncStorageAdapter,
+  createDefaultAdapter,
+  diffRows,
+  rowsToSnapshot,
+  snapshotToRows,
+  type PersistenceAdapter,
+  type SnapshotRows,
+  type StoredSnapshot,
+} from './sqlite-store';
 
 // ═══════════════════════════════════════════════════════════
 // TYPES & INTERFACES
@@ -569,13 +579,78 @@ const now = () => new Date().toISOString().replace('T', ' ').slice(0, 19);
 const today = () => new Date().toISOString().split('T')[0];
 export const getToday = today;
 
+// ─── Persistence backend (Phase 1: SQLite) ─────────────────────────
+// The store itself is unchanged; only how it reaches the disk changed.
+// On native devices the backend is SQLite (see services/sqlite-store.ts);
+// in Node (unit tests) and on web it is AsyncStorage. `lastSavedRows`
+// holds the serialised rows of the last successfully saved snapshot, so
+// each persist writes only the diff instead of the whole store.
+let persistenceBackend: PersistenceAdapter = createDefaultAdapter();
+let lastSavedRows: SnapshotRows | null = null;
+let deferPersistCount = 0;
+let persistDeferred = false;
+const migrationStatus = { migratedFromAsyncStorage: false };
+
+/** Swap the persistence backend (tests only). Resets the saved-rows
+ * baseline, so the next persist writes a full snapshot. */
+export function setPersistenceBackend(adapter: PersistenceAdapter): void {
+  persistenceBackend = adapter;
+  lastSavedRows = null;
+  migrationStatus.migratedFromAsyncStorage = false;
+}
+
+export function getPersistenceBackendName(): string {
+  return persistenceBackend.name;
+}
+
+/** Backend in use, whether the legacy AsyncStorage snapshot was migrated
+ * in this session, and the key of a quarantined corrupt snapshot, if any. */
+export function getMigrationStatus(): {
+  backend: string;
+  migratedFromAsyncStorage: boolean;
+  corruptSnapshotKey: string | null;
+} {
+  return {
+    backend: persistenceBackend.name,
+    migratedFromAsyncStorage: migrationStatus.migratedFromAsyncStorage,
+    corruptSnapshotKey: lastCorruptSnapshotKey,
+  };
+}
+
+function takeSnapshotRows(): SnapshotRows {
+  const snapshot: StoredSnapshot = {
+    store: store as unknown as Record<string, unknown>,
+    ids: { ...ids },
+    invoiceCounter,
+  };
+  return snapshotToRows(snapshot);
+}
+
 function persistStore(): void {
-  const snapshot = JSON.stringify({ store, ids, invoiceCounter });
+  // Inside an atomic commit, defer the write: addAuditLog() during the
+  // commit must not persist an intermediate snapshot (see
+  // commitReturnAtomically). The deferred write is flushed once, after
+  // the commit succeeds or the rollback restores the previous state.
+  if (deferPersistCount > 0) {
+    persistDeferred = true;
+    return;
+  }
+  // Rows are serialised strings, detached from the live store, so the
+  // queued write cannot observe later mutations.
+  const rows = takeSnapshotRows();
+  const diff = lastSavedRows ? diffRows(lastSavedRows, rows) : null;
   // Keep the queue recoverable for later writes, but do not erase the current
   // write's failure. Callers that need durability must await flushDatabaseWrites().
   persistQueue = persistQueue
     .catch(() => undefined)
-    .then(() => AsyncStorage.setItem(STORE_KEY, snapshot));
+    .then(async () => {
+      if (diff && persistenceBackend.saveDiff) {
+        await persistenceBackend.saveDiff(diff);
+      } else {
+        await persistenceBackend.saveSnapshot(rowsToSnapshot(rows));
+      }
+      lastSavedRows = rows;
+    });
   // Prevent an unhandled-rejection warning for legacy synchronous callers.
   // The original promise remains rejected and is observable via flushDatabaseWrites().
   void persistQueue.catch(() => undefined);
@@ -676,36 +751,122 @@ export function getLastCorruptSnapshotKey(): string | null {
   return lastCorruptSnapshotKey;
 }
 
-async function hydrateStore(): Promise<void> {
-  // Keep `raw` outside the try so a JSON.parse failure can still preserve it.
+/** A snapshot as read back from storage: same shape as StoredSnapshot,
+ * but with the store untyped, so both the typed in-memory store and a
+ * parsed JSON snapshot can be applied through this one function. */
+type LooseSnapshot = {
+  store?: Record<string, unknown>;
+  ids?: Record<string, number>;
+  invoiceCounter?: number;
+};
+
+function applySnapshot(saved: LooseSnapshot): void {
+  if (saved.store) {
+    Object.keys(store).forEach((key) => {
+      const value = saved.store?.[key];
+      if (value !== undefined) (store as Record<string, unknown>)[key] = value;
+    });
+  }
+  if (saved.ids) Object.assign(ids, saved.ids);
+  if (typeof saved.invoiceCounter === 'number') invoiceCounter = saved.invoiceCounter;
+}
+
+/** Preserve a corrupt legacy AsyncStorage snapshot under a unique
+ * timestamped key (never overwritten), as introduced in PR #35. */
+async function quarantineLegacySnapshot(): Promise<void> {
   let raw: string | null = null;
   try {
     raw = await AsyncStorage.getItem(STORE_KEY);
-    if (!raw) return;
-    const saved = JSON.parse(raw) as { store?: typeof store; ids?: typeof ids; invoiceCounter?: number };
-    if (saved.store) {
-      Object.keys(store).forEach((key) => {
-        const value = saved.store?.[key as keyof typeof store];
-        if (value !== undefined) (store as any)[key] = value;
-      });
-    }
-    if (saved.ids) Object.assign(ids, saved.ids);
-    if (typeof saved.invoiceCounter === 'number') invoiceCounter = saved.invoiceCounter;
   } catch {
-    // A corrupt local snapshot must not prevent the app from opening.
-    // Preserve the damaged text under a unique timestamped key (never
-    // overwritten) so it can be inspected/recovered, then continue with
-    // the in-memory defaults already initialised by initDefaults().
-    if (raw) {
-      const corruptKey = `${STORE_KEY}/corrupt-${Date.now()}`;
-      lastCorruptSnapshotKey = corruptKey;
+    return;
+  }
+  if (!raw) return;
+  const corruptKey = `${STORE_KEY}/corrupt-${Date.now()}`;
+  lastCorruptSnapshotKey = corruptKey;
+  try {
+    await AsyncStorage.setItem(corruptKey, raw);
+  } catch {
+    // Preserving the corrupt snapshot is best-effort; the app must
+    // still open with defaults even if storage is unavailable.
+  }
+}
+
+/**
+ * One-time migration of the legacy AsyncStorage snapshot into the
+ * current backend (SQLite on native devices). The legacy copy is
+ * deliberately kept in AsyncStorage as a rollback. Returns true only
+ * when a snapshot was actually migrated. Exported for tests and for
+ * the system-tools screen; hydrateStore calls it automatically when
+ * the backend is empty.
+ */
+export async function migrateFromAsyncStorageIfNeeded(): Promise<boolean> {
+  // The AsyncStorage backend already reads the legacy snapshot itself.
+  if (persistenceBackend.name === 'async-storage') return false;
+  let raw: string | null = null;
+  try {
+    raw = await AsyncStorage.getItem(STORE_KEY);
+  } catch {
+    return false;
+  }
+  if (!raw) return false;
+  try {
+    const saved = JSON.parse(raw) as LooseSnapshot;
+    applySnapshot(saved);
+    const rows = takeSnapshotRows();
+    await persistenceBackend.saveSnapshot(rowsToSnapshot(rows));
+    lastSavedRows = rows;
+    migrationStatus.migratedFromAsyncStorage = true;
+    // Record the one-time migration in backend meta (best-effort).
+    try {
+      if (persistenceBackend.saveDiff) {
+        await persistenceBackend.saveDiff({
+          upserts: [],
+          deletes: [],
+          metaUpserts: [['migrated_from_asyncstorage', '1']],
+          metaDeletes: [],
+        });
+      }
+    } catch {
+      // The flag is advisory; the data itself was already migrated.
+    }
+    return true;
+  } catch {
+    // A corrupt legacy snapshot must not prevent the app from opening.
+    await quarantineLegacySnapshot();
+    return false;
+  }
+}
+
+async function hydrateStore(): Promise<void> {
+  let loaded: StoredSnapshot | null = null;
+  try {
+    loaded = await persistenceBackend.loadSnapshot();
+  } catch {
+    if (persistenceBackend.name === 'async-storage') {
+      // The legacy snapshot itself is corrupt: quarantine it (PR #35).
+      await quarantineLegacySnapshot();
+    } else {
+      // The SQLite database could not be opened: fall back to the legacy
+      // AsyncStorage snapshot rather than starting empty.
+      persistenceBackend = new AsyncStorageAdapter();
       try {
-        await AsyncStorage.setItem(corruptKey, raw);
+        loaded = await persistenceBackend.loadSnapshot();
       } catch {
-        // Preserving the corrupt snapshot is best-effort; the app must
-        // still open with defaults even if storage is unavailable.
+        await quarantineLegacySnapshot();
       }
     }
+  }
+  if (loaded) {
+    applySnapshot(loaded);
+    lastSavedRows = snapshotToRows(loaded);
+    try {
+      migrationStatus.migratedFromAsyncStorage =
+        (await persistenceBackend.getMeta?.('migrated_from_asyncstorage')) === '1';
+    } catch {
+      // The flag is advisory; the data itself loaded fine.
+    }
+  } else if (persistenceBackend.name !== 'async-storage') {
+    await migrateFromAsyncStorageIfNeeded();
   }
   // Migrate the former built-in Saudi currency default to the requested Yemeni rial.
   // Preserve any non-default currency explicitly chosen by the pharmacy.
@@ -1944,20 +2105,36 @@ function nextPurchaseReturnNumber(id: number): string {
 }
 
 function commitReturnAtomically<T>(commit: () => T): T {
-  const result = withAtomicMutation(
-    () => JSON.stringify({ store, ids, invoiceCounter }),
-    (serialized) => {
-      const snapshot = JSON.parse(serialized) as { store: typeof store; ids: typeof ids; invoiceCounter: number };
-      Object.keys(store).forEach(key => { (store as any)[key] = (snapshot.store as any)[key]; });
-      Object.assign(ids, snapshot.ids);
-      invoiceCounter = snapshot.invoiceCounter;
-    },
-    commit,
-    persistStore,
-  );
-  // Persist every successful atomic transaction as well as rollback recovery.
-  persistStore();
-  return result;
+  // Defer persistence while the commit runs: addAuditLog() inside the
+  // commit used to write an intermediate snapshot to disk, so killing
+  // the app mid-commit could leave a partial state on disk even though
+  // the in-memory rollback was correct. Writes requested during the
+  // commit are flushed exactly once below, after the commit succeeds
+  // or the rollback restores the previous state. Nested atomic commits
+  // share the counter and flush only at the outermost exit.
+  deferPersistCount++;
+  try {
+    const result = withAtomicMutation(
+      () => JSON.stringify({ store, ids, invoiceCounter }),
+      (serialized) => {
+        const snapshot = JSON.parse(serialized) as { store: typeof store; ids: typeof ids; invoiceCounter: number };
+        Object.keys(store).forEach(key => { (store as any)[key] = (snapshot.store as any)[key]; });
+        Object.assign(ids, snapshot.ids);
+        invoiceCounter = snapshot.invoiceCounter;
+      },
+      commit,
+      persistStore,
+    );
+    // Persist every successful atomic transaction as well as rollback recovery.
+    persistStore();
+    return result;
+  } finally {
+    deferPersistCount--;
+    if (deferPersistCount === 0 && persistDeferred) {
+      persistDeferred = false;
+      persistStore();
+    }
+  }
 }
 
 export interface NewSaleReturn {
