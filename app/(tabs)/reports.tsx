@@ -329,7 +329,7 @@ export default function ReportsScreen() {
           </ScrollView>}
         </Card>
         <Text style={{ fontSize: 10, color: theme.colors.textTertiary, textAlign: 'center', paddingHorizontal: 8 }}>
-          التقارير مبنية على البيانات المحلية الحالية. لا تعتبرها تقارير موحّدة بين الأجهزة حتى تُنفّذ المزامنة السحابية وتُختبر فعليًا.
+          التقارير مبنية على البيانات المحلية الحالية. المزامنة السحابية يدوية الآن من الإعدادات (زر «مزامنة الآن»)، فزامن قبل اعتماد التقارير المشتركة بين الأجهزة.
         </Text>
       </ScrollView>
     </View>

@@ -7,11 +7,13 @@ import { withAtomicMutation } from './atomic-store';
 import { isPermissionAllowed } from './employee-permissions';
 import {
   AsyncStorageAdapter,
+  COLLECTION_NAMES,
   createDefaultAdapter,
   diffRows,
   rowsToSnapshot,
   snapshotToRows,
   type PersistenceAdapter,
+  type SnapshotDiff,
   type SnapshotRows,
   type StoredSnapshot,
 } from './sqlite-store';
@@ -36,6 +38,20 @@ export type BatchStatus = 'ACTIVE' | 'EXPIRED' | 'DEPLETED' | 'RECALLED';
 export type ReturnSettlementMethod = 'CASH_REFUND' | 'CUSTOMER_BALANCE' | 'CUSTOMER_CREDIT' | 'SUPPLIER_BALANCE';
 export type ReturnCondition = 'SELLABLE' | 'DAMAGED';
 
+// ─── Cloud sync identity ──────────────────────────────────────────
+/** Identity of a row for cloud sync (see docs/CLOUD_SYNC.md). Present on
+ * every synced row; optional so legacy snapshots load without them — the
+ * store backfills them on load and stamps them on every change.
+ * `syncId` is the global identity (remote `client_id`); the local numeric
+ * `id` never leaves the device and never identifies a row remotely.
+ * `updatedAt` is an ISO timestamp driving last-write-wins conflicts;
+ * `syncDeviceId` is the device that last wrote the row (tie-breaker). */
+export interface SyncFields {
+  syncId?: string;
+  updatedAt?: string;
+  syncDeviceId?: string;
+}
+
 // ─── Pharmacy ─────────────────────────────────────────────
 export interface Pharmacy {
   id: number;
@@ -53,7 +69,7 @@ export interface Pharmacy {
 }
 
 // ─── Users & Roles ────────────────────────────────────────
-export interface User {
+export interface User extends SyncFields {
   id: number;
   username: string;
   password_hash: string;
@@ -69,7 +85,7 @@ export interface User {
 }
 
 // ─── Products ─────────────────────────────────────────────
-export interface Product {
+export interface Product extends SyncFields {
   id: number;
   barcode: string | null;
   internal_code: string | null;
@@ -95,7 +111,7 @@ export interface Product {
   updated_at: string;
 }
 
-export interface ProductUnit {
+export interface ProductUnit extends SyncFields {
   id: number;
   product_id: number;
   unit_name: string;
@@ -111,7 +127,7 @@ export interface ProductUnit {
 }
 
 // ─── Batches ──────────────────────────────────────────────
-export interface Batch {
+export interface Batch extends SyncFields {
   id: number;
   product_id: number;
   batch_number: string;
@@ -132,7 +148,7 @@ export interface Batch {
 }
 
 // ─── Stock Movements ──────────────────────────────────────
-export interface StockMovement {
+export interface StockMovement extends SyncFields {
   id: number;
   product_id: number;
   batch_id: number | null;
@@ -148,7 +164,7 @@ export interface StockMovement {
 }
 
 // ─── Sales ────────────────────────────────────────────────
-export interface Sale {
+export interface Sale extends SyncFields {
   id: number;
   invoice_number: string;
   sale_type: SaleType;
@@ -173,7 +189,7 @@ export interface Sale {
   created_at: string;
 }
 
-export interface SaleItem {
+export interface SaleItem extends SyncFields {
   id: number;
   sale_id: number;
   product_id: number;
@@ -194,7 +210,7 @@ export interface SaleItem {
   cogs: number;
 }
 
-export interface SaleBatchAllocation {
+export interface SaleBatchAllocation extends SyncFields {
   id: number;
   sale_item_id: number;
   batch_id: number;
@@ -202,7 +218,7 @@ export interface SaleBatchAllocation {
   purchase_price: number;
 }
 
-export interface SalePayment {
+export interface SalePayment extends SyncFields {
   id: number;
   sale_id: number;
   amount: number;
@@ -213,7 +229,7 @@ export interface SalePayment {
 }
 
 // ─── Purchases ────────────────────────────────────────────
-export interface Purchase {
+export interface Purchase extends SyncFields {
   id: number;
   invoice_number: string;
   supplier_id: number | null;
@@ -233,7 +249,7 @@ export interface Purchase {
   created_at: string;
 }
 
-export interface PurchaseItem {
+export interface PurchaseItem extends SyncFields {
   id: number;
   purchase_id: number;
   product_id: number;
@@ -278,7 +294,7 @@ export interface SaleReturnItem {
   condition?: ReturnCondition;
 }
 
-export interface SaleReturn {
+export interface SaleReturn extends SyncFields {
   id: number;
   sale_id: number;
   return_number?: string;
@@ -317,7 +333,7 @@ export interface PurchaseReturnItem {
   previously_returned_quantity?: number;
 }
 
-export interface PurchaseReturn {
+export interface PurchaseReturn extends SyncFields {
   id: number;
   purchase_id: number;
   return_number?: string;
@@ -339,7 +355,7 @@ export interface PurchaseReturn {
 }
 
 // ─── Customers ────────────────────────────────────────────
-export interface Customer {
+export interface Customer extends SyncFields {
   id: number;
   name: string;
   phone: string | null;
@@ -350,7 +366,7 @@ export interface Customer {
   created_at: string;
 }
 
-export interface CustomerTransaction {
+export interface CustomerTransaction extends SyncFields {
   id: number;
   customer_id: number;
   type: 'sale' | 'payment' | 'return' | 'adjustment';
@@ -363,7 +379,7 @@ export interface CustomerTransaction {
 }
 
 // ─── Suppliers ────────────────────────────────────────────
-export interface Supplier {
+export interface Supplier extends SyncFields {
   id: number;
   name: string;
   phone: string | null;
@@ -374,7 +390,7 @@ export interface Supplier {
   created_at: string;
 }
 
-export interface SupplierTransaction {
+export interface SupplierTransaction extends SyncFields {
   id: number;
   supplier_id: number;
   type: 'purchase' | 'payment' | 'return' | 'adjustment';
@@ -395,7 +411,7 @@ export const CASHBOXES: readonly CashboxDefinition[] = [
   { id: 'bank', label: 'صندوق الصراف / البنك', shortLabel: 'الصراف / البنك' },
 ];
 
-export interface CashTransaction {
+export interface CashTransaction extends SyncFields {
   id: number;
   type: 'SALE_CASH' | 'COLLECTION' | 'PURCHASE_PAYMENT' | 'SUPPLIER_PAYMENT'
       | 'CUSTOMER_REFUND' | 'PURCHASE_RETURN' | 'EXPENSE' | 'WITHDRAWAL' | 'DEPOSIT' | 'OPENING' | 'CLOSING' | 'ADJUSTMENT'
@@ -413,7 +429,7 @@ export interface CashTransaction {
 }
 
 // ─── Shifts ───────────────────────────────────────────────
-export interface Shift {
+export interface Shift extends SyncFields {
   id: number;
   user_id: number | null;
   user_name: string | null;
@@ -433,7 +449,7 @@ export interface Shift {
 }
 
 // ─── Expenses ─────────────────────────────────────────────
-export interface Expense {
+export interface Expense extends SyncFields {
   id: number;
   category: string;
   amount: number;
@@ -446,7 +462,7 @@ export interface Expense {
 }
 
 // ─── Audit ────────────────────────────────────────────────
-export interface AuditLog {
+export interface AuditLog extends SyncFields {
   id: number;
   user_id: number | null;
   user_name: string | null;
@@ -529,6 +545,22 @@ export interface InventoryItem {
   batches: Batch[];
 }
 
+// ─── Cloud sync outbox ────────────────────────────────────────────
+/** One pending cloud-sync change. Built from the persistence diff in
+ * persistStore(), so every local mutation is recorded exactly once per
+ * row (repeated edits merge into the latest entry). Entries are removed
+ * only after a successful push (see clearSyncedOutbox). The outbox is
+ * part of the store, so it survives restarts like any other collection;
+ * it is never itself recorded in the outbox. */
+export interface SyncOutboxEntry extends SyncFields {
+  id: number;
+  collection: string;
+  op: 'upsert' | 'delete';
+  attempts: number;
+  lastError: string | null;
+  createdAt: string;
+}
+
 // ═══════════════════════════════════════════════════════════
 // IN-MEMORY STORE
 // ═══════════════════════════════════════════════════════════
@@ -557,6 +589,7 @@ const store = {
   shifts: [] as Shift[],
   expenses: [] as Expense[],
   auditLogs: [] as AuditLog[],
+  syncOutbox: [] as SyncOutboxEntry[],
 };
 
 const ids = {
@@ -566,7 +599,7 @@ const ids = {
   purchases: 1, purchaseItems: 1,
   customers: 1, customerTx: 1,
   suppliers: 1, supplierTx: 1,
-  cashTx: 1, shifts: 1, expenses: 1, auditLogs: 1, users: 1,
+  cashTx: 1, shifts: 1, expenses: 1, auditLogs: 1, users: 1, syncOutbox: 1,
 };
 
 let invoiceCounter = 1000;
@@ -626,6 +659,292 @@ function takeSnapshotRows(): SnapshotRows {
   return snapshotToRows(snapshot);
 }
 
+// ─── Cloud sync: identity, device, outbox ─────────────────────────
+// See docs/CLOUD_SYNC.md. The outbox is built here, in persistStore(),
+// because every mutation in this module funnels through it — no service
+// function needs to know about sync. The sync engine itself lives in
+// services/cloud-sync.ts and only uses the exported helpers below.
+
+/** Collections that may leave the device. `users` (local accounts with
+ * password hashes) and the `syncOutbox` itself never sync. */
+export const SYNCABLE_COLLECTIONS = (COLLECTION_NAMES as readonly string[]).filter(
+  name => name !== 'users' && name !== 'syncOutbox',
+);
+
+/** Local numeric-id counter key per collection, for rows pulled from the
+ * cloud (they arrive with a syncId but without a local numeric id). */
+const IDS_KEY_BY_COLLECTION: Record<string, string> = {
+  products: 'products',
+  productUnits: 'productUnits',
+  batches: 'batches',
+  stockMovements: 'stockMovements',
+  sales: 'sales',
+  saleItems: 'saleItems',
+  saleBatchAllocations: 'saleAllocations',
+  salePayments: 'salePayments',
+  saleReturns: 'saleReturns',
+  purchases: 'purchases',
+  purchaseItems: 'purchaseItems',
+  purchaseReturns: 'purchaseReturns',
+  customers: 'customers',
+  customerTransactions: 'customerTx',
+  suppliers: 'suppliers',
+  supplierTransactions: 'supplierTx',
+  cashTransactions: 'cashTx',
+  shifts: 'shifts',
+  expenses: 'expenses',
+  auditLogs: 'auditLogs',
+};
+
+let outboxSuppressCount = 0;
+let persistInProgress = false;
+
+const isoNow = () => new Date().toISOString();
+
+/** Generate a UUID v4. Uses crypto.randomUUID() when available; the
+ * fallback keeps the same shape from time + randomness. */
+export function generateSyncId(): string {
+  try {
+    const c = (globalThis as unknown as { crypto?: { randomUUID?: () => string } }).crypto;
+    if (c?.randomUUID) return c.randomUUID();
+  } catch {
+    // Fall through to the fallback below.
+  }
+  const hex = (n: number) => {
+    let out = '';
+    for (let i = 0; i < n; i++) out += Math.floor(Math.random() * 16).toString(16);
+    return out;
+  };
+  const variant = ['8', '9', 'a', 'b'][Math.floor(Math.random() * 4)];
+  return `${hex(8)}-${hex(4)}-4${hex(3)}-${variant}${hex(3)}-${hex(12)}`;
+}
+
+/** Stable per-device id, kept as a setting (settings never sync). This
+ * never calls persistStore() itself: the in-flight persist writes the
+ * setting, and any other caller persists it on its next write. */
+export function getSyncDeviceId(): string {
+  let id = store.settings['sync_device_id'];
+  if (!id) {
+    id = generateSyncId();
+    store.settings['sync_device_id'] = id;
+  }
+  return id;
+}
+
+/** Assign a sync identity to a row that lacks one. `updatedAt` falls back
+ * to the row's created_at (or now) so a legacy row keeps its original age
+ * instead of looking brand new on its first sync. */
+function ensureSyncFields(row: Record<string, unknown>): void {
+  if (typeof row['syncId'] !== 'string' || !row['syncId']) row['syncId'] = generateSyncId();
+  if (typeof row['updatedAt'] !== 'string' || !row['updatedAt']) {
+    const created = typeof row['created_at'] === 'string' ? (row['created_at'] as string) : '';
+    row['updatedAt'] = created || isoNow();
+  }
+  if (typeof row['syncDeviceId'] !== 'string' || !row['syncDeviceId']) {
+    row['syncDeviceId'] = getSyncDeviceId();
+  }
+}
+
+function ensureSyncFieldsForAllRows(): void {
+  for (const name of COLLECTION_NAMES as readonly string[]) {
+    if (name === 'syncOutbox') continue;
+    const list = (store as Record<string, unknown>)[name];
+    if (!Array.isArray(list)) continue;
+    for (const row of list as Array<Record<string, unknown>>) ensureSyncFields(row);
+  }
+}
+
+function findLiveRow(collection: string, rowId: number): Record<string, unknown> | null {
+  const list = (store as Record<string, unknown>)[collection];
+  if (!Array.isArray(list)) return null;
+  return (list as Array<Record<string, unknown>>).find(r => r?.['id'] === rowId) ?? null;
+}
+
+function parseRowData(data: string): Record<string, unknown> | null {
+  try {
+    const value: unknown = JSON.parse(data);
+    return value && typeof value === 'object' && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Record outbox entries for one persistence diff. Repeated edits of the
+ * same row merge into a single entry holding the latest op; a delete
+ * always replaces an earlier upsert for the same row. Outbox rows
+ * themselves and non-syncable collections are skipped, and the `at`
+ * timestamp (the stamp time of this write) is the entry's updatedAt. */
+function recordOutboxEntries(diff: SnapshotDiff, at: string): void {
+  const savedByKey = new Map<string, string>();
+  if (lastSavedRows) {
+    for (const row of lastSavedRows.rows) savedByKey.set(`${row.collection}:${row.rowId}`, row.data);
+  }
+  const bySyncId = new Map(store.syncOutbox.map(entry => [entry.syncId, entry]));
+  const apply = (syncId: string, collection: string, op: 'upsert' | 'delete') => {
+    const existing = bySyncId.get(syncId);
+    if (existing) {
+      existing.op = op;
+      existing.collection = collection;
+      existing.updatedAt = at;
+      existing.attempts = 0;
+      existing.lastError = null;
+    } else {
+      const entry: SyncOutboxEntry = {
+        id: ids.syncOutbox++,
+        collection,
+        syncId,
+        op,
+        updatedAt: at,
+        attempts: 0,
+        lastError: null,
+        createdAt: at,
+      };
+      store.syncOutbox.push(entry);
+      bySyncId.set(syncId, entry);
+    }
+  };
+  for (const row of diff.upserts) {
+    if (row.collection === 'syncOutbox' || !SYNCABLE_COLLECTIONS.includes(row.collection)) continue;
+    const parsed = parseRowData(row.data);
+    const syncId = parsed?.['syncId'];
+    if (typeof syncId !== 'string' || !syncId) continue;
+    apply(syncId, row.collection, 'upsert');
+  }
+  for (const deleted of diff.deletes) {
+    if (deleted.collection === 'syncOutbox' || !SYNCABLE_COLLECTIONS.includes(deleted.collection)) continue;
+    const parsed = parseRowData(savedByKey.get(`${deleted.collection}:${deleted.rowId}`) ?? '');
+    const syncId = parsed?.['syncId'];
+    if (typeof syncId !== 'string' || !syncId) continue;
+    apply(syncId, deleted.collection, 'delete');
+  }
+}
+
+/** Number of local changes waiting to be pushed to the cloud. */
+export function getPendingSyncCount(): number {
+  return store.syncOutbox.length;
+}
+
+/** A copy of the pending outbox (for the sync engine and the UI). */
+export function getSyncOutboxSnapshot(): SyncOutboxEntry[] {
+  return store.syncOutbox.map(entry => ({ ...entry }));
+}
+
+/** Remove the outbox entries that were pushed successfully. */
+export function clearSyncedOutbox(syncIds: string[]): void {
+  if (syncIds.length === 0) return;
+  const wanted = new Set(syncIds);
+  store.syncOutbox = store.syncOutbox.filter(entry => !wanted.has(entry.syncId ?? ''));
+  persistStore();
+}
+
+/** Record a failed push attempt on entries (kept for retry). */
+export function noteOutboxFailure(syncIds: string[], message: string): void {
+  if (syncIds.length === 0) return;
+  const wanted = new Set(syncIds);
+  let changed = false;
+  for (const entry of store.syncOutbox) {
+    if (wanted.has(entry.syncId ?? '')) {
+      entry.attempts += 1;
+      entry.lastError = message;
+      changed = true;
+    }
+  }
+  if (changed) persistStore();
+}
+
+/** Run `fn` without recording outbox entries (used by the sync engine
+ * when applying rows pulled from the cloud, so a pull never echoes
+ * back into the outbox and the sync cannot loop). */
+export function withOutboxSuppressed<T>(fn: () => T): T {
+  outboxSuppressCount += 1;
+  try {
+    return fn();
+  } finally {
+    outboxSuppressCount -= 1;
+  }
+}
+
+/** The live local row with this syncId, or null. Read-only: the sync
+ * engine maps it immediately and never mutates it. */
+export function getLocalRowBySyncId(
+  collection: string,
+  syncId: string,
+): Record<string, unknown> | null {
+  const list = (store as Record<string, unknown>)[collection];
+  if (!Array.isArray(list)) return null;
+  return (list as Array<Record<string, unknown>>).find(row => row?.['syncId'] === syncId) ?? null;
+}
+
+/** Copies of every local row in a collection (for the sync engine's
+ * foreign-key resolution). */
+export function getAllLocalRows(collection: string): Array<Record<string, unknown>> {
+  const list = (store as Record<string, unknown>)[collection];
+  if (!Array.isArray(list)) return [];
+  return (list as Array<Record<string, unknown>>).map(row => ({ ...row }));
+}
+
+/** Give nested return-line items their parent return's local id. */
+function patchReturnItems(row: Record<string, unknown>, returnId: number): void {
+  const items = row['items'];
+  if (!Array.isArray(items)) return;
+  for (const item of items as Array<Record<string, unknown>>) {
+    if (item && typeof item === 'object') item['return_id'] = returnId;
+  }
+}
+
+/**
+ * Apply rows pulled from the cloud to one collection, plus remote deletes.
+ * Rows are matched by syncId: an existing row is replaced in place (keeping
+ * its local numeric id); a new row gets the next local id. The caller wraps
+ * this in withOutboxSuppressed() and persists once at the end.
+ */
+export function applyPulledChanges(
+  collection: string,
+  rows: Array<Record<string, unknown>>,
+  deletedSyncIds: string[],
+): void {
+  const list = (store as Record<string, unknown>)[collection];
+  if (!Array.isArray(list)) return;
+  const arr = list as Array<Record<string, unknown>>;
+  const bySyncId = new Map<string, Record<string, unknown>>();
+  for (const row of arr) {
+    if (typeof row['syncId'] === 'string' && row['syncId']) bySyncId.set(row['syncId'], row);
+  }
+  for (const row of rows) {
+    const syncId = row['syncId'];
+    if (typeof syncId !== 'string' || !syncId) continue;
+    const existing = bySyncId.get(syncId);
+    if (existing) {
+      const localId = existing['id'];
+      for (const key of Object.keys(existing)) delete existing[key];
+      Object.assign(existing, row, { id: localId });
+      // Nested return-line items carry the parent's local id, which the
+      // mapper cannot know before the parent exists locally.
+      if ((collection === 'saleReturns' || collection === 'purchaseReturns') && typeof localId === 'number') {
+        patchReturnItems(existing, localId);
+      }
+    } else {
+      const counterKey = IDS_KEY_BY_COLLECTION[collection];
+      const nextId = counterKey ? (ids as Record<string, number>)[counterKey]++ : 0;
+      const created = { ...row, id: nextId };
+      if (collection === 'saleReturns' || collection === 'purchaseReturns') {
+        patchReturnItems(created, nextId);
+      }
+      arr.push(created);
+      bySyncId.set(syncId, created);
+    }
+  }
+  if (deletedSyncIds.length > 0) {
+    const doomed = new Set(deletedSyncIds);
+    (store as Record<string, unknown>)[collection] = arr.filter(
+      row => typeof row['syncId'] !== 'string' || !doomed.has(row['syncId']),
+    );
+  }
+  persistStore();
+}
+
 function persistStore(): void {
   // Inside an atomic commit, defer the write: addAuditLog() during the
   // commit must not persist an intermediate snapshot (see
@@ -635,25 +954,60 @@ function persistStore(): void {
     persistDeferred = true;
     return;
   }
-  // Rows are serialised strings, detached from the live store, so the
-  // queued write cannot observe later mutations.
-  const rows = takeSnapshotRows();
-  const diff = lastSavedRows ? diffRows(lastSavedRows, rows) : null;
-  // Keep the queue recoverable for later writes, but do not erase the current
-  // write's failure. Callers that need durability must await flushDatabaseWrites().
-  persistQueue = persistQueue
-    .catch(() => undefined)
-    .then(async () => {
-      if (diff && persistenceBackend.saveDiff) {
-        await persistenceBackend.saveDiff(diff);
-      } else {
-        await persistenceBackend.saveSnapshot(rowsToSnapshot(rows));
+  persistInProgress = true;
+  try {
+    // Every row gets a sync identity first, so the diff below always
+    // carries syncIds (including legacy rows and rows created by code
+    // paths that never set one explicitly).
+    ensureSyncFieldsForAllRows();
+    const beforeRows = takeSnapshotRows();
+    const beforeDiff = lastSavedRows ? diffRows(lastSavedRows, beforeRows) : null;
+    const stampAt = isoNow();
+    if (beforeDiff) {
+      // Stamp exactly the rows this write changes, so the outbox and the
+      // remote copy carry a fresh updatedAt for those rows only. Rows
+      // untouched by this write keep their old timestamp. Rows applied
+      // from a pull (outbox suppressed) are never re-stamped: their
+      // remote updatedAt is the truth, and stamping them "now" would make
+      // a stale copy look newer than a later remote edit.
+      if (outboxSuppressCount === 0) {
+        for (const upsert of beforeDiff.upserts) {
+          if (upsert.collection === 'syncOutbox') continue;
+          const live = findLiveRow(upsert.collection, upsert.rowId);
+          if (live) {
+            live['updatedAt'] = stampAt;
+            live['syncDeviceId'] = getSyncDeviceId();
+          }
+        }
+        recordOutboxEntries(beforeDiff, stampAt);
       }
-      lastSavedRows = rows;
-    });
-  // Prevent an unhandled-rejection warning for legacy synchronous callers.
-  // The original promise remains rejected and is observable via flushDatabaseWrites().
-  void persistQueue.catch(() => undefined);
+    } else if (outboxSuppressCount === 0) {
+      // First persist after load with no saved baseline: everything in
+      // the store is pending upload, so record it exactly once.
+      recordOutboxEntries(diffRows({ meta: [], rows: [] }, beforeRows), stampAt);
+    }
+    // Rows are serialised strings, detached from the live store, so the
+    // queued write cannot observe later mutations.
+    const rows = takeSnapshotRows();
+    const diff = lastSavedRows ? diffRows(lastSavedRows, rows) : null;
+    // Keep the queue recoverable for later writes, but do not erase the current
+    // write's failure. Callers that need durability must await flushDatabaseWrites().
+    persistQueue = persistQueue
+      .catch(() => undefined)
+      .then(async () => {
+        if (diff && persistenceBackend.saveDiff) {
+          await persistenceBackend.saveDiff(diff);
+        } else {
+          await persistenceBackend.saveSnapshot(rowsToSnapshot(rows));
+        }
+        lastSavedRows = rows;
+      });
+    // Prevent an unhandled-rejection warning for legacy synchronous callers.
+    // The original promise remains rejected and is observable via flushDatabaseWrites().
+    void persistQueue.catch(() => undefined);
+  } finally {
+    persistInProgress = false;
+  }
 }
 
 /** Resolve only after all writes queued so far have reached device storage. */
@@ -769,6 +1123,16 @@ function applySnapshot(saved: LooseSnapshot): void {
   }
   if (saved.ids) Object.assign(ids, saved.ids);
   if (typeof saved.invoiceCounter === 'number') invoiceCounter = saved.invoiceCounter;
+  // Backfill sync identity on legacy rows (loaded before sync existed, or
+  // restored from an old backup): they get a syncId now and the next
+  // persist records them in the outbox, so they upload on the first sync.
+  // Rows that already carry a syncId are untouched.
+  for (const name of COLLECTION_NAMES as readonly string[]) {
+    if (name === 'syncOutbox') continue;
+    const list = (store as Record<string, unknown>)[name];
+    if (!Array.isArray(list)) continue;
+    for (const row of list as Array<Record<string, unknown>>) ensureSyncFields(row);
+  }
 }
 
 /** Preserve a corrupt legacy AsyncStorage snapshot under a unique

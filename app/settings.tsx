@@ -6,6 +6,8 @@ import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '@/contexts/ThemeContext';
 import { getSetting, setSetting, getOpeningBalance, addOpeningBalance, flushDatabaseWrites } from '@/services/database';
+import { getSharedSupabaseClient } from '@/template/core/client';
+import { CloudSyncError, getSyncStatus, syncNow, type SyncStatus } from '@/services/cloud-sync';
 import { useAlert } from '@/template';
 import { PinSetup } from '@/components/ui';
 import { usePermissions } from '@/hooks/usePermissions';
@@ -38,6 +40,63 @@ export default function SettingsScreen() {
   const [openingBalance, setOpeningBalance] = useState('');
   const [openingBalanceTotal, setOpeningBalanceTotal] = useState(0);
   const [geminiApiKey, setGeminiApiKey] = useState('');
+  const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
+  const [syncing, setSyncing] = useState(false);
+  const [syncMessage, setSyncMessage] = useState('');
+
+  /** The shared Supabase client, or undefined when Supabase is not
+   * configured on this device (getSharedSupabaseClient throws then). */
+  const getSyncClient = () => {
+    try {
+      return getSharedSupabaseClient();
+    } catch {
+      return undefined;
+    }
+  };
+
+  const refreshSyncStatus = async () => {
+    try {
+      setSyncStatus(await getSyncStatus({ client: getSyncClient() }));
+    } catch {
+      setSyncStatus(null);
+    }
+  };
+
+  const handleSyncNow = async () => {
+    const client = getSyncClient();
+    if (!client) {
+      setSyncMessage('المزامنة غير مهيأة على هذا الجهاز: أضف بيانات Supabase ثم أعد المحاولة.');
+      return;
+    }
+    setSyncing(true);
+    setSyncMessage('');
+    try {
+      const result = await syncNow({ client });
+      const parts = [`رُفعت ${result.pushed} تغييرات`, `سُحبت ${result.pulled} صفوف`];
+      if (result.conflictsResolved > 0) parts.push(`حُلّت ${result.conflictsResolved} تعارضات`);
+      if (result.deletedApplied > 0) parts.push(`طُبّقت ${result.deletedApplied} عمليات حذف`);
+      setSyncMessage(result.errors.length > 0
+        ? `${parts.join('، ')}. تنبيه: ${result.errors[0]}`
+        : `تمت المزامنة: ${parts.join('، ')}.`);
+    } catch (error: any) {
+      setSyncMessage(error instanceof CloudSyncError
+        ? error.message
+        : (error?.message || 'تعذرت المزامنة. تحقق من الإنترنت ثم أعد المحاولة.'));
+    } finally {
+      setSyncing(false);
+      void refreshSyncStatus();
+    }
+  };
+
+  const syncStateLabel = !syncStatus
+    ? 'غير مهيأة'
+    : !syncStatus.configured
+      ? 'غير مهيأة'
+      : !syncStatus.signedIn
+        ? 'غير مسجّل الدخول'
+        : syncStatus.hasPharmacy === false
+          ? 'الحساب غير مرتبط بصيدلية'
+          : 'جاهز';
 
   useEffect(() => {
     setPharmacyName(getSetting('pharmacy_name') || '');
@@ -50,6 +109,7 @@ export default function SettingsScreen() {
     setPinEnabled(getSetting('pin_enabled') === 'true');
     setOpeningBalanceTotal(getOpeningBalance());
     SecureStore.getItemAsync('gemini_api_key').then(value => setGeminiApiKey(value || '')).catch(() => undefined);
+    void refreshSyncStatus();
   }, []);
 
   const handleSave = async () => {
@@ -220,6 +280,29 @@ export default function SettingsScreen() {
               <Text style={{ fontSize: 14, color: theme.colors.primary, fontWeight: '600' }}>تغيير رمز PIN</Text>
             </TouchableOpacity>
           )}
+        </View>
+
+        {/* Cloud sync (manual) */}
+        <Text style={{ fontSize: 13, fontWeight: '700', color: theme.colors.textPrimary, textAlign: 'right', marginBottom: 12, borderRightWidth: 3, borderRightColor: theme.colors.primary, paddingRight: 8 }}>المزامنة السحابية</Text>
+        <View style={{ backgroundColor: theme.colors.surface, borderRadius: 12, borderWidth: 1, borderColor: theme.colors.border, padding: 14, marginBottom: 14 }}>
+          <Text style={{ fontSize: 14, color: theme.colors.textPrimary, textAlign: 'right', marginBottom: 6 }}>الحالة: {syncStateLabel}</Text>
+          <Text style={{ fontSize: 12, color: theme.colors.textSecondary, textAlign: 'right', marginBottom: 6 }}>
+            آخر مزامنة: {syncStatus?.lastSyncAt ? new Date(syncStatus.lastSyncAt).toLocaleString('ar') : 'لم تتم مزامنة بعد'}
+          </Text>
+          <Text style={{ fontSize: 12, color: theme.colors.textSecondary, textAlign: 'right', marginBottom: 12 }}>
+            التغييرات المعلّقة: {syncStatus?.pending ?? '—'}
+          </Text>
+          <TouchableOpacity
+            onPress={() => { void handleSyncNow(); }}
+            disabled={syncing}
+            style={{ backgroundColor: theme.colors.primary, borderRadius: 8, padding: 12, alignItems: 'center', opacity: syncing ? 0.5 : 1 }}
+          >
+            <Text style={{ color: '#FFFFFF', fontWeight: '800' }}>{syncing ? 'جارٍ المزامنة…' : 'مزامنة الآن'}</Text>
+          </TouchableOpacity>
+          {syncMessage ? <Text style={{ fontSize: 12, color: theme.colors.textSecondary, textAlign: 'right', marginTop: 10, lineHeight: 18 }}>{syncMessage}</Text> : null}
+          <Text style={{ fontSize: 11, color: theme.colors.textTertiary, textAlign: 'right', marginTop: 10, lineHeight: 17 }}>
+            مزامنة يدوية فقط: ارفع تغييراتك ثم اسحب تغييرات الأجهزة الأخرى. عند التعارض يفوز أحدث تعديل على مستوى الصف كاملاً.
+          </Text>
         </View>
 
         {/* Navigation */}
