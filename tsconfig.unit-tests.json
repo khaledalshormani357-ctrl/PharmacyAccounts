@@ -18,6 +18,7 @@
     "services/session.ts",
     "services/sqlite-store.ts",
     "services/sqlite-typed.ts",
+    "services/sqlite-writes.ts",
     "services/cloud-sync.ts",
     "services/customer-invoice.ts",
     "services/return-invoice.ts",

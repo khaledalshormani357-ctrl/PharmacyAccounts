@@ -24,6 +24,13 @@ import {
   getReportSummarySql,
   type TypedDb,
 } from './sqlite-typed';
+import {
+  buildSaleWritePlan,
+  executeSaleTransaction,
+  type PlannedSaleItem,
+  type SalePlanInput,
+  type SaleWritePlan,
+} from './sqlite-writes';
 
 // ═══════════════════════════════════════════════════════════
 // TYPES & INTERFACES
@@ -1239,6 +1246,26 @@ function applySnapshot(saved: LooseSnapshot): void {
   }
   if (saved.ids) Object.assign(ids, saved.ids);
   if (typeof saved.invoiceCounter === 'number') invoiceCounter = saved.invoiceCounter;
+  // A stored counter must never fall behind the rows it already issued:
+  // a stale meta (e.g. a write that reached disk after a newer one, or a
+  // snapshot whose counters predate its rows) must not reuse an id or an
+  // invoice number. Only raises counters, never lowers them.
+  for (const [collection, counterKey] of Object.entries({
+    ...IDS_KEY_BY_COLLECTION,
+    users: 'users',
+    syncOutbox: 'syncOutbox',
+  })) {
+    const list = (store as Record<string, unknown>)[collection];
+    if (!Array.isArray(list)) continue;
+    let maxId = 0;
+    for (const row of list as Array<Record<string, unknown>>) {
+      const value = row?.['id'];
+      if (typeof value === 'number' && Number.isFinite(value)) maxId = Math.max(maxId, value);
+    }
+    const current = (ids as Record<string, number>)[counterKey];
+    if (typeof current === 'number') (ids as Record<string, number>)[counterKey] = Math.max(current, maxId + 1);
+  }
+  invoiceCounter = Math.max(invoiceCounter, maxInvoiceNumberFromSales());
   // Backfill sync identity on legacy rows (loaded before sync existed, or
   // restored from an old backup): they get a syncId now and the next
   // persist records them in the outbox, so they upload on the first sync.
@@ -2222,238 +2249,480 @@ export interface SaleResult {
   error?: string;
 }
 
-export function createSale(data: NewSale, actor?: User | null): SaleResult {
-  const saleDenied = checkPermission(actor, 'sales.create', 'sale')
+function salePermissionError(data: NewSale, actor?: User | null): string | null {
+  return checkPermission(actor, 'sales.create', 'sale')
     ?? ((data.sale_type === 'credit' || data.sale_type === 'mixed') && data.customer_id
       ? checkPermission(actor, 'customers.credit', 'sale') : null);
-  if (saleDenied) return { success: false, error: saleDenied };
-  try {
-    if (!data.items.length) return { success: false, error: 'أضف صنفًا واحدًا على الأقل' };
-    if (!Number.isFinite(data.discount) || data.discount < 0 || !Number.isFinite(data.amount_paid) || data.amount_paid < 0) {
-      return { success: false, error: 'قيمة الخصم أو المبلغ المدفوع غير صحيحة' };
+}
+
+/** A sale fully validated and resolved, without any mutation. Shared by
+ * the legacy in-memory path and the SQL path (Phase 3), so both paths
+ * validate, price and allocate identically. */
+interface PreparedSaleItem {
+  item: NewSaleItem;
+  product: Product;
+  qty_in_inv_unit: number;
+  allocations: FefoAllocation[];
+  line_total: number;
+  item_cogs: number;
+  base_purchase_price: number;
+}
+
+interface PreparedSale {
+  data: NewSale;
+  items: PreparedSaleItem[];
+  subtotal: number;
+  total: number;
+  amount_paid: number;
+  change_given: number;
+  remaining: number;
+  total_cogs: number;
+  sale_date: string;
+  customer: Customer | null;
+  customer_name: string | null;
+  customer_balance_after: number | null;
+  shift: Shift | null;
+}
+
+/** Validate a sale and resolve units + FEFO allocations without mutating
+ * anything. Returns the first validation error, if any. */
+function prepareSale(data: NewSale): { ok: true; prepared: PreparedSale } | { ok: false; error: string } {
+  if (!data.items.length) return { ok: false, error: 'أضف صنفًا واحدًا على الأقل' };
+  if (!Number.isFinite(data.discount) || data.discount < 0 || !Number.isFinite(data.amount_paid) || data.amount_paid < 0) {
+    return { ok: false, error: 'قيمة الخصم أو المبلغ المدفوع غير صحيحة' };
+  }
+  // Validate items and resolve units
+  const resolvedItems: PreparedSaleItem[] = [];
+  const reserved = new Map<number, number>();
+
+  for (const item of data.items) {
+    const product = getProduct(item.product_id);
+    if (!product) return { ok: false, error: `منتج غير موجود: ${item.product_id}` };
+    if (!isValidUnitQuantity(item.quantity, item.unit) || !Number.isFinite(item.unit_price) || item.unit_price < 0 ||
+        !Number.isFinite(item.discount) || item.discount < 0 || item.discount > item.quantity * item.unit_price) {
+      return { ok: false, error: `تحقق من الكمية والسعر والخصم للصنف ${product.trade_name}` };
     }
-    // Validate items and resolve units
-    const resolvedItems: (NewSaleItem & { qty_in_inv_unit: number; allocations: FefoAllocation[] })[] = [];
-    const reserved = new Map<number, number>();
+    const factor = getUnitConversionFactor(item.product_id, item.unit);
+    if (factor === null) return { ok: false, error: `الوحدة ${item.unit} غير معرفة للصنف ${product.trade_name}` };
+    const qtyInInvUnit = toBaseQuantity(item.quantity, factor);
 
-    for (const item of data.items) {
-      const product = getProduct(item.product_id);
-      if (!product) return { success: false, error: `منتج غير موجود: ${item.product_id}` };
-      if (!isValidUnitQuantity(item.quantity, item.unit) || !Number.isFinite(item.unit_price) || item.unit_price < 0 ||
-          !Number.isFinite(item.discount) || item.discount < 0 || item.discount > item.quantity * item.unit_price) {
-        return { success: false, error: `تحقق من الكمية والسعر والخصم للصنف ${product.trade_name}` };
-      }
-      const factor = getUnitConversionFactor(item.product_id, item.unit);
-      if (factor === null) return { success: false, error: `الوحدة ${item.unit} غير معرفة للصنف ${product.trade_name}` };
-      const qtyInInvUnit = toBaseQuantity(item.quantity, factor);
-
-      // FEFO allocation
-      const allocs = allocateFefo(item.product_id, qtyInInvUnit, reserved);
-      if (!allocs) {
-        return { success: false, error: `المخزون غير كافٍ: ${product.trade_name}` };
-      }
-      allocs.forEach(allocation => reserved.set(allocation.batch_id, (reserved.get(allocation.batch_id) || 0) + allocation.quantity));
-
-      resolvedItems.push({ ...item, qty_in_inv_unit: qtyInInvUnit, allocations: allocs });
+    // FEFO allocation
+    const allocs = allocateFefo(item.product_id, qtyInInvUnit, reserved);
+    if (!allocs) {
+      return { ok: false, error: `المخزون غير كافٍ: ${product.trade_name}` };
     }
+    allocs.forEach(allocation => reserved.set(allocation.batch_id, (reserved.get(allocation.batch_id) || 0) + allocation.quantity));
 
-    // Calculate totals
-    let subtotal = 0;
-    for (const item of resolvedItems) {
-      const lineTotal = item.quantity * item.unit_price - item.discount;
-      subtotal += lineTotal;
+    const lineTotal = item.quantity * item.unit_price - item.discount;
+    let itemCogs = 0;
+    for (const alloc of allocs) {
+      itemCogs += alloc.quantity * alloc.purchase_price;
     }
-    if (data.discount > subtotal) return { success: false, error: 'خصم الفاتورة أكبر من مجموع الأصناف' };
-    const total = subtotal - data.discount;
-    const amountPaid = Math.min(data.amount_paid, total);
-    const remaining = total - amountPaid;
-    const changeGiven = data.amount_paid > total ? data.amount_paid - total : 0;
+    resolvedItems.push({
+      item, product, qty_in_inv_unit: qtyInInvUnit, allocations: allocs,
+      line_total: lineTotal, item_cogs: itemCogs,
+      base_purchase_price: qtyInInvUnit > 0 ? itemCogs / qtyInInvUnit : 0,
+    });
+  }
 
-    const saleDate = data.date || today();
-    if (!isValidIsoDate(saleDate)) return { success: false, error: 'تاريخ فاتورة البيع غير صحيح' };
-    if (!Number.isFinite(data.amount_paid) || data.amount_paid < 0) return { success: false, error: 'المبلغ المدفوع غير صحيح' };
-    // Credit limit: refuse a credit/mixed sale whose remaining balance would
-    // push the customer over their limit. Checked before any mutation.
-    if ((data.sale_type === 'credit' || data.sale_type === 'mixed') && data.customer_id) {
-      const limitCheck = checkCreditLimit(data.customer_id, remaining);
-      if (limitCheck && limitCheck.credit_limit > 0 && !limitCheck.allowed) {
-        return { success: false, error: 'تجاوز حد الائتمان للعميل: الرصيد الحالي + المتبقي من هذه الفاتورة يتجاوز الحد المسموح' };
-      }
+  // Calculate totals
+  let subtotal = 0;
+  let totalCogs = 0;
+  for (const item of resolvedItems) {
+    subtotal += item.line_total;
+    totalCogs += item.item_cogs;
+  }
+  if (data.discount > subtotal) return { ok: false, error: 'خصم الفاتورة أكبر من مجموع الأصناف' };
+  const total = subtotal - data.discount;
+  const amountPaid = Math.min(data.amount_paid, total);
+  const remaining = total - amountPaid;
+  const changeGiven = data.amount_paid > total ? data.amount_paid - total : 0;
+
+  const saleDate = data.date || today();
+  if (!isValidIsoDate(saleDate)) return { ok: false, error: 'تاريخ فاتورة البيع غير صحيح' };
+  if (!Number.isFinite(data.amount_paid) || data.amount_paid < 0) return { ok: false, error: 'المبلغ المدفوع غير صحيح' };
+  // Credit limit: refuse a credit/mixed sale whose remaining balance would
+  // push the customer over their limit. Checked before any mutation.
+  if ((data.sale_type === 'credit' || data.sale_type === 'mixed') && data.customer_id) {
+    const limitCheck = checkCreditLimit(data.customer_id, remaining);
+    if (limitCheck && limitCheck.credit_limit > 0 && !limitCheck.allowed) {
+      return { ok: false, error: 'تجاوز حد الائتمان للعميل: الرصيد الحالي + المتبقي من هذه الفاتورة يتجاوز الحد المسموح' };
     }
-    // Commit invoice, inventory, balances, cash and audit as one rollback-capable mutation.
-    return commitReturnAtomically(() => {
-    // Create sale record
-    const sale: Sale = {
-      id: ids.sales++,
-      invoice_number: nextInvoice(),
-      sale_type: data.sale_type,
-      customer_id: data.customer_id ?? null,
-      customer_name: data.customer_id
-        ? (store.customers.find(c => c.id === data.customer_id)?.name ?? null)
-        : null,
-      subtotal,
-      discount: data.discount,
-      total,
-      amount_paid: amountPaid,
-      change_given: changeGiven,
-      remaining,
-      cogs: 0,
-      gross_profit: 0,
-      date: saleDate,
-      shift_id: data.shift_id ?? null,
-      user_id: data.user_id ?? null,
-      notes: data.notes ?? null,
-      cancelled: false,
-      cancelled_by: null,
-      cancelled_at: null,
-      cancel_reason: null,
-      created_at: now(),
+  }
+
+  const customer = data.customer_id ? (store.customers.find(c => c.id === data.customer_id) ?? null) : null;
+  const customerBalanceAfter =
+    ((data.sale_type === 'credit' || remaining > 0) && customer) ? customer.balance + remaining : null;
+  const shift = data.shift_id ? (store.shifts.find(s => s.id === data.shift_id) ?? null) : null;
+  return {
+    ok: true,
+    prepared: {
+      data, items: resolvedItems, subtotal, total, amount_paid: amountPaid,
+      change_given: changeGiven, remaining, total_cogs: totalCogs, sale_date: saleDate,
+      customer, customer_name: customer?.name ?? null,
+      customer_balance_after: customerBalanceAfter, shift,
+    },
+  };
+}
+
+/** The legacy in-memory sale mutation, applied to a prepared sale. Must
+ * be called inside commitReturnAtomically() (it relies on the deferred
+ * persist + rollback). Its behaviour is unchanged from the pre-Phase-3
+ * createSale. */
+function executePreparedSaleInMemory(prepared: PreparedSale): SaleResult {
+  const data = prepared.data;
+  const resolvedItems = prepared.items;
+  const subtotal = prepared.subtotal;
+  const total = prepared.total;
+  const amountPaid = prepared.amount_paid;
+  const changeGiven = prepared.change_given;
+  const remaining = prepared.remaining;
+  const saleDate = prepared.sale_date;
+  // Create sale record
+  const sale: Sale = {
+    id: ids.sales++,
+    invoice_number: nextInvoice(),
+    sale_type: data.sale_type,
+    customer_id: data.customer_id ?? null,
+    customer_name: prepared.customer_name,
+    subtotal,
+    discount: data.discount,
+    total,
+    amount_paid: amountPaid,
+    change_given: changeGiven,
+    remaining,
+    cogs: 0,
+    gross_profit: 0,
+    date: saleDate,
+    shift_id: data.shift_id ?? null,
+    user_id: data.user_id ?? null,
+    notes: data.notes ?? null,
+    cancelled: false,
+    cancelled_by: null,
+    cancelled_at: null,
+    cancel_reason: null,
+    created_at: now(),
+  };
+
+  let totalCogs = 0;
+
+  // Create sale items + batch allocations + stock movements
+  for (const item of resolvedItems) {
+    const lineTotal = item.line_total;
+    const itemCogs = item.item_cogs;
+
+    const saleItem: SaleItem = {
+      id: ids.saleItems++,
+      sale_id: sale.id,
+      product_id: item.item.product_id,
+      product_name: item.product.trade_name,
+      batch_id: item.allocations[0]?.batch_id ?? null,
+      unit: item.item.unit,
+      quantity: item.item.quantity,
+      unit_name: item.item.unit,
+      quantity_entered: item.item.quantity,
+      conversion_factor: item.item.quantity > 0 ? item.qty_in_inv_unit / item.item.quantity : 0,
+      quantity_in_inventory_unit: item.qty_in_inv_unit,
+      unit_price: item.item.unit_price,
+      base_purchase_price: item.base_purchase_price,
+      discount: item.item.discount,
+      line_total: lineTotal,
+      cogs: itemCogs,
     };
+    store.saleItems.push(saleItem);
+    totalCogs += itemCogs;
 
-    let totalCogs = 0;
+    // Batch allocations + deduct stock
+    for (const alloc of item.allocations) {
+      store.saleBatchAllocations.push({
+        id: ids.saleAllocations++,
+        sale_item_id: saleItem.id,
+        batch_id: alloc.batch_id,
+        quantity_allocated: alloc.quantity,
+        purchase_price: alloc.purchase_price,
+      });
 
-    // Create sale items + batch allocations + stock movements
-    for (const item of resolvedItems) {
-      const lineTotal = item.quantity * item.unit_price - item.discount;
-      let itemCogs = 0;
-
-      for (const alloc of item.allocations) {
-        itemCogs += alloc.quantity * alloc.purchase_price;
-      }
-
-      const saleItem: SaleItem = {
-        id: ids.saleItems++,
-        sale_id: sale.id,
-        product_id: item.product_id,
-        product_name: getProduct(item.product_id)?.trade_name ?? '',
-        batch_id: item.allocations[0]?.batch_id ?? null,
-        unit: item.unit,
-        quantity: item.quantity,
-        unit_name: item.unit,
-        quantity_entered: item.quantity,
-        conversion_factor: item.qty_in_inv_unit / item.quantity,
-        quantity_in_inventory_unit: item.qty_in_inv_unit,
-        unit_price: item.unit_price,
-        base_purchase_price: item.qty_in_inv_unit > 0 ? itemCogs / item.qty_in_inv_unit : 0,
-        discount: item.discount,
-        line_total: lineTotal,
-        cogs: itemCogs,
-      };
-      store.saleItems.push(saleItem);
-      totalCogs += itemCogs;
-
-      // Batch allocations + deduct stock
-      for (const alloc of item.allocations) {
-        store.saleBatchAllocations.push({
-          id: ids.saleAllocations++,
-          sale_item_id: saleItem.id,
-          batch_id: alloc.batch_id,
-          quantity_allocated: alloc.quantity,
-          purchase_price: alloc.purchase_price,
-        });
-
-        // Deduct from batch
-        const batch = store.batches.find(b => b.id === alloc.batch_id);
-        if (batch) {
-          batch.quantity -= alloc.quantity;
-          if (batch.quantity <= 0) {
-            batch.quantity = 0;
-            batch.status = 'DEPLETED';
-          }
-        }
-
-        // Stock movement
-        store.stockMovements.push({
-          id: ids.stockMovements++,
-          product_id: item.product_id,
-          batch_id: alloc.batch_id,
-          type: 'SALE',
-          quantity: -alloc.quantity,
-          unit: getProduct(item.product_id)?.inventory_unit ?? 'قطعة',
-          quantity_in_inventory_unit: -alloc.quantity,
-          reference_type: 'sale',
-          reference_id: sale.id,
-          note: null,
-          user_id: data.user_id ?? null,
-          created_at: now(),
-        });
-      }
-    }
-
-    // Update sale COGS and profit
-    sale.cogs = totalCogs;
-    sale.gross_profit = total - totalCogs;
-    store.sales.push(sale);
-
-    // Customer balance for credit sales
-    if ((data.sale_type === 'credit' || remaining > 0) && data.customer_id) {
-      const customer = store.customers.find(c => c.id === data.customer_id);
-      if (customer) {
-        customer.balance += remaining;
-        store.customerTransactions.push({
-          id: ids.customerTx++,
-          customer_id: data.customer_id,
-          type: 'sale',
-          amount: total,
-          balance_after: customer.balance,
-          reference_id: sale.id,
-          note: `فاتورة ${sale.invoice_number}`,
-          date: saleDate,
-          created_at: now(),
-        });
-        if (amountPaid > 0) {
-          store.customerTransactions.push({
-            id: ids.customerTx++,
-            customer_id: data.customer_id,
-            type: 'payment',
-            amount: -amountPaid,
-            balance_after: customer.balance,
-            reference_id: sale.id,
-            note: `دفعة من فاتورة ${sale.invoice_number}`,
-            date: saleDate,
-            created_at: now(),
-          });
+      // Deduct from batch
+      const batch = store.batches.find(b => b.id === alloc.batch_id);
+      if (batch) {
+        batch.quantity -= alloc.quantity;
+        if (batch.quantity <= 0) {
+          batch.quantity = 0;
+          batch.status = 'DEPLETED';
         }
       }
-    }
 
-    // Cash transaction
-    if (amountPaid > 0) {
-      store.cashTransactions.push({
-        id: ids.cashTx++,
-        type: 'SALE_CASH',
-        amount: amountPaid,
+      // Stock movement
+      store.stockMovements.push({
+        id: ids.stockMovements++,
+        product_id: item.item.product_id,
+        batch_id: alloc.batch_id,
+        type: 'SALE',
+        quantity: -alloc.quantity,
+        unit: item.product.inventory_unit,
+        quantity_in_inventory_unit: -alloc.quantity,
         reference_type: 'sale',
         reference_id: sale.id,
-        shift_id: data.shift_id ?? null,
-        note: `بيع نقدي - ${sale.invoice_number}`,
+        note: null,
         user_id: data.user_id ?? null,
-        date: saleDate,
         created_at: now(),
       });
     }
+  }
 
-    // Update shift totals
-    if (data.shift_id) {
-      const shift = store.shifts.find(s => s.id === data.shift_id);
-      if (shift) {
-        shift.total_sales += total;
-        shift.expected_cash = (shift.expected_cash || shift.opening_cash) + amountPaid;
+  // Update sale COGS and profit
+  sale.cogs = totalCogs;
+  sale.gross_profit = total - totalCogs;
+  store.sales.push(sale);
+
+  // Customer balance for credit sales
+  if ((data.sale_type === 'credit' || remaining > 0) && data.customer_id) {
+    const customer = prepared.customer;
+    if (customer) {
+      customer.balance += remaining;
+      store.customerTransactions.push({
+        id: ids.customerTx++,
+        customer_id: data.customer_id,
+        type: 'sale',
+        amount: total,
+        balance_after: customer.balance,
+        reference_id: sale.id,
+        note: `فاتورة ${sale.invoice_number}`,
+        date: saleDate,
+        created_at: now(),
+      });
+      if (amountPaid > 0) {
+        store.customerTransactions.push({
+          id: ids.customerTx++,
+          customer_id: data.customer_id,
+          type: 'payment',
+          amount: -amountPaid,
+          balance_after: customer.balance,
+          reference_id: sale.id,
+          note: `دفعة من فاتورة ${sale.invoice_number}`,
+          date: saleDate,
+          created_at: now(),
+        });
       }
     }
+  }
 
-    addAuditLog({
-      action: 'SALE_CREATE', entity: 'sale', entity_id: sale.id,
-      after_data: JSON.stringify({ invoice: sale.invoice_number, total }),
+  // Cash transaction
+  if (amountPaid > 0) {
+    store.cashTransactions.push({
+      id: ids.cashTx++,
+      type: 'SALE_CASH',
+      amount: amountPaid,
+      reference_type: 'sale',
+      reference_id: sale.id,
+      shift_id: data.shift_id ?? null,
+      note: `بيع نقدي - ${sale.invoice_number}`,
+      user_id: data.user_id ?? null,
+      date: saleDate,
+      created_at: now(),
     });
+  }
 
-    return { success: true, sale };
-    });
+  // Update shift totals
+  if (data.shift_id) {
+    const shift = prepared.shift;
+    if (shift) {
+      shift.total_sales += total;
+      shift.expected_cash = (shift.expected_cash || shift.opening_cash) + amountPaid;
+    }
+  }
+
+  addAuditLog({
+    action: 'SALE_CREATE', entity: 'sale', entity_id: sale.id,
+    after_data: JSON.stringify({ invoice: sale.invoice_number, total }),
+  });
+
+  return { success: true, sale };
+}
+
+export function createSale(data: NewSale, actor?: User | null): SaleResult {
+  const saleDenied = salePermissionError(data, actor);
+  if (saleDenied) return { success: false, error: saleDenied };
+  try {
+    const prepared = prepareSale(data);
+    if (!prepared.ok) return { success: false, error: prepared.error };
+    // Commit invoice, inventory, balances, cash and audit as one rollback-capable mutation.
+    return commitReturnAtomically(() => executePreparedSaleInMemory(prepared.prepared));
   } catch (e: any) {
     return { success: false, error: e?.message || 'خطأ غير متوقع' };
   }
 }
 
+// ─── SQL sale path (Phase 3) ────────────────────────────────────────
+// createSale is synchronous and expo-sqlite is async, so the SQL path
+// lives in this async twin: same permission checks and the same
+// prepareSale validation, then one SQL transaction, then the same rows
+// applied to the in-memory store. Screens adopt createSaleAsync
+// gradually; the synchronous createSale stays as the legacy path and as
+// the fallback when the typed store is not ready.
+
+/** Whether the SQL sale path can run. False until ensureTypedStoreReady()
+ * succeeds; createSaleAsync falls back to the legacy path when false. */
+export function isSqlSaleWriteEnabled(): boolean {
+  return isTypedStoreReady();
+}
+
+/** Serialises concurrent SQL sales: each sale's plan is built from the
+ * live store only after the previous SQL sale applied, so two sales can
+ * never reserve the same invoice number or over-sell the same batch. */
+let sqlSaleQueue: Promise<void> = Promise.resolve();
+
+/** Assemble a write plan from a prepared sale and the live counters. */
+function toPlanInput(prepared: PreparedSale): SalePlanInput {
+  const batches: Batch[] = [];
+  const seen = new Set<number>();
+  for (const item of prepared.items) {
+    for (const alloc of item.allocations) {
+      if (seen.has(alloc.batch_id)) continue;
+      seen.add(alloc.batch_id);
+      const batch = store.batches.find(b => b.id === alloc.batch_id);
+      if (batch) batches.push(batch);
+    }
+  }
+  return {
+    sale_type: prepared.data.sale_type,
+    customer_id: prepared.data.customer_id ?? null,
+    customer_name: prepared.customer_name,
+    customer: prepared.customer,
+    customer_balance_after: prepared.customer_balance_after,
+    customer_credit_limit: prepared.customer ? prepared.customer.credit_limit : null,
+    shift: prepared.shift,
+    user_id: prepared.data.user_id ?? null,
+    notes: prepared.data.notes ?? null,
+    date: prepared.sale_date,
+    subtotal: prepared.subtotal,
+    discount: prepared.data.discount,
+    total: prepared.total,
+    amount_paid: prepared.amount_paid,
+    change_given: prepared.change_given,
+    remaining: prepared.remaining,
+    total_cogs: prepared.total_cogs,
+    items: prepared.items.map((entry): PlannedSaleItem => ({
+      product_id: entry.item.product_id,
+      product_name: entry.product.trade_name,
+      inventory_unit: entry.product.inventory_unit,
+      unit: entry.item.unit,
+      quantity: entry.item.quantity,
+      qty_in_inv_unit: entry.qty_in_inv_unit,
+      unit_price: entry.item.unit_price,
+      discount: entry.item.discount,
+      line_total: entry.line_total,
+      item_cogs: entry.item_cogs,
+      base_purchase_price: entry.base_purchase_price,
+      allocations: entry.allocations.map(alloc => ({ ...alloc })),
+    })),
+    batches,
+    ids: { ...ids },
+    invoice_counter: invoiceCounter,
+    created_at: now(),
+    updated_at_iso: isoNow(),
+    device_id: getSyncDeviceId(),
+  };
+}
+
+/** Apply an executed SQL sale plan to the in-memory store: the same rows
+ * the transaction wrote, in the same order the legacy path pushes them.
+ * Then persistStore() records the outbox entries and writes the diff. */
+function applySalePlanToMemory(plan: SaleWritePlan): void {
+  for (const item of plan.saleItems) store.saleItems.push(item);
+  for (const alloc of plan.allocations) store.saleBatchAllocations.push(alloc);
+  for (const movement of plan.stockMovements) store.stockMovements.push(movement);
+  for (const updated of plan.updatedBatches) {
+    const batch = store.batches.find(b => b.id === updated.id);
+    if (batch) {
+      batch.quantity = updated.quantity;
+      batch.status = updated.status;
+    }
+  }
+  store.sales.push(plan.sale);
+  for (const tx of plan.customerTransactions) store.customerTransactions.push(tx);
+  if (plan.updatedCustomer) {
+    const customer = store.customers.find(c => c.id === plan.updatedCustomer?.id);
+    if (customer) customer.balance = plan.updatedCustomer.balance;
+  }
+  if (plan.cashTransaction) store.cashTransactions.push(plan.cashTransaction);
+  if (plan.updatedShift) {
+    const shift = store.shifts.find(s => s.id === plan.updatedShift?.id);
+    if (shift) {
+      shift.total_sales = plan.updatedShift.total_sales;
+      shift.expected_cash = plan.updatedShift.expected_cash;
+    }
+  }
+  store.auditLogs.push(plan.auditLog);
+  Object.assign(ids, plan.nextIds);
+  invoiceCounter = plan.nextInvoiceCounter;
+}
+
+/**
+ * Run one sale through the SQL transaction. Returns null when the typed
+ * store is unavailable (caller falls back to the legacy path). A failed
+ * SQL transaction returns a failure result and is NEVER retried on the
+ * legacy path: the transaction may have committed before the failure was
+ * observed, and a silent fallback could sell twice.
+ */
+async function executeSqlSale(data: NewSale): Promise<SaleResult | null> {
+  const getDb = persistenceBackend.getTypedDb;
+  if (typeof getDb !== 'function') return null;
+  const db = await getDb.call(persistenceBackend);
+  if (!db) return null;
+  try {
+    // Flush pending legacy writes first, so the counter check inside the
+    // transaction sees the same counters the plan is built from.
+    try {
+      await flushDatabaseWrites();
+    } catch {
+      // The in-transaction counter check below is the guard if the flush failed.
+    }
+    // Re-prepare inside the serialised queue: an earlier sale may have
+    // consumed the batches this sale planned against.
+    const prepared = prepareSale(data);
+    if (!prepared.ok) return { success: false, error: prepared.error };
+    const plan = buildSaleWritePlan(toPlanInput(prepared.prepared));
+    await executeSaleTransaction(db, plan);
+    applySalePlanToMemory(plan);
+    persistStore();
+    return { success: true, sale: plan.sale };
+  } catch (e: any) {
+    const message = typeof e?.message === 'string' ? e.message : '';
+    if (message === 'INSUFFICIENT_STOCK' || message.startsWith('INSUFFICIENT_STOCK')) {
+      return { success: false, error: 'المخزون غير كافٍ' };
+    }
+    if (message.startsWith('COUNTER_MISMATCH')) {
+      return { success: false, error: 'تعارض في أرقام الفواتير، أعد المحاولة' };
+    }
+    return { success: false, error: message || 'تعذّر حفظ البيع في قاعدة البيانات' };
+  }
+}
+
+/** Async twin of createSale: the sale runs inside one SQL transaction
+ * when the typed store is ready, and falls back to the legacy in-memory
+ * path otherwise. The result shape and validation errors are identical
+ * on both paths. */
+export async function createSaleAsync(data: NewSale, actor?: User | null): Promise<SaleResult> {
+  const saleDenied = salePermissionError(data, actor);
+  if (saleDenied) return { success: false, error: saleDenied };
+  try {
+    const first = prepareSale(data);
+    if (!first.ok) return { success: false, error: first.error };
+    if (await ensureTypedStoreReady()) {
+      const run = sqlSaleQueue.then(() => executeSqlSale(data));
+      sqlSaleQueue = run.then(
+        () => undefined,
+        () => undefined,
+      );
+      const result = await run;
+      if (result !== null) return result;
+    }
+    return commitReturnAtomically(() => executePreparedSaleInMemory(first.prepared));
+  } catch (e: any) {
+    return { success: false, error: e?.message || 'خطأ غير متوقع' };
+  }
+}
 export function cancelSale(id: number, reason: string, user_id?: number, actor?: User | null): void {
   const denied = checkPermission(actor, 'sales.cancel', 'sale');
   if (denied) throw new Error(denied);
