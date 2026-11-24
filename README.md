@@ -80,6 +80,23 @@ computation on any failure; the synchronous read functions and the
 write path are unchanged. Full details: `docs/SQLITE_MIGRATION.md`
 («Phase 2» section).
 
+## Persistence (SQLite, Phase 3 — the sale write moves to SQL)
+
+Phase 3 moves only the sale write (`createSale`) into a real SQL
+transaction (`services/sqlite-writes.ts`): a pure
+`buildSaleWritePlan` validates the credit limit and stock, allocates
+FEFO and assigns identifiers without writing anything, then
+`executeSaleTransaction` reserves the invoice counter, deducts the
+batches with a guarded `UPDATE` and writes every row inside one
+transaction — any failure rolls everything back. The same plan rows
+are then applied to the in-memory store and the sync outbox through
+the existing `persistStore()` mechanism. If the SQL transaction
+fails, `createSale` returns a failure instead of silently falling
+back to the old path (a silent retry could sell twice). When the
+typed store is not ready the old in-memory path runs unchanged, and
+purchases, returns and cancellations still use it. Full details:
+`docs/SQLITE_MIGRATION.md` («Phase 3» section).
+
 ## Cloud sync (manual, Phase 1)
 
 Settings > «المزامنة السحابية» offers a manual **«مزامنة الآن»** button:

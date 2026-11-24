@@ -263,12 +263,114 @@ same allocation for the same sale.
   available for screens to adopt incrementally).
 - AsyncStorage was not removed.
 
-## Phase 3 (proposed)
+## Phase 3 (implemented) — the sale write moves to SQL
 
-- Move the write path to SQL: each sale/purchase/return executes as
-  real SQL statements inside one transaction instead of mutating the
-  in-memory store and mirroring a diff — the in-memory store then
-  becomes a read cache (or disappears).
+Scope: **only `createSale`** writes through SQL. Purchases, returns
+and cancellations still use the old in-memory path (see «What Phase 3
+deliberately does NOT do» below). No screen in `app/` was changed and
+no public function signature changed.
+
+### The plan-then-execute model (`services/sqlite-writes.ts`)
+
+A sale is split into two steps that are deliberately kept apart:
+
+1. **Plan** — `buildSaleWritePlan(input, snapshot): SaleWritePlan`
+   is a pure function: it takes the sale inputs and a read-only
+   snapshot of the current state (products, batches, customer,
+   counters) and builds the complete set of rows the sale will
+   write, **without writing anything**. It validates the credit
+   limit and stock availability, allocates FEFO by reusing the
+   Phase 2 `allocateFefo` (no third FEFO logic), computes totals,
+   COGS and profit, and assigns identifiers from the current
+   counters. On any validation failure it returns a clear error
+   before any write happens.
+2. **Execute** — `executeSaleTransaction(db, plan): SaleWriteResult`
+   runs the plan inside one SQL transaction (`BEGIN IMMEDIATE` …
+   `COMMIT`, `ROLLBACK` on any failure) over the Phase 2 `TypedDb`
+   interface — no expo-sqlite or node:sqlite import inside
+   services. The steps inside the transaction, in order:
+   1. **Reserve the counters**: read `ids` and `invoiceCounter`
+      from `meta` and verify the database is not ahead of the
+      memory the plan was built from (a database ahead of memory
+      would mean a previous sale was lost); the new values are
+      stored in the same transaction, so two concurrent sales can
+      never take the same invoice number.
+   2. **Deduct the batches** with a guarded update —
+      `UPDATE batches SET quantity = quantity - ? WHERE id = ? AND
+      quantity >= ?` — and check the affected-row count: zero
+      means the stock is gone and the whole transaction aborts
+      with `INSUFFICIENT_STOCK`.
+   3. **Write every row** (sale, items, batch allocations, stock
+      movements, customer/cash transactions, audit log, updated
+      batches/customer/shift) to the generic `collections` table
+      and the typed tables via the Phase 2 dual-write helpers, and
+      store the reserved counters.
+   4. **Commit.** Any error at any step rolls everything back.
+
+### Wiring in `erp-database.ts` (`createSale` only)
+
+- `createSaleAsync(data, actor?)` is the new entry point; the
+  synchronous `createSale` is unchanged. After the permission
+  checks and input validation, if the typed store is ready
+  (`isTypedStoreReady()`), it builds the plan and executes it
+  through the SQLite adapter (`withTypedDb(fn)` on
+  `PersistenceAdapter`, implemented by `ExpoSqliteAdapter`; the
+  test adapter implements the same method).
+- After a successful SQL transaction the **same plan rows** are
+  applied to the in-memory store (no recomputation), the in-memory
+  counters are updated, and the plan is recorded in the sync
+  outbox through the existing `persistStore()` mechanism — no new
+  outbox code. The returned `SaleResult` is identical to the old
+  path's result on the same inputs.
+- **No silent fallback.** If the SQL transaction fails for any
+  reason the database has already rolled back, memory is
+  untouched, and `createSale` returns a failure `SaleResult` in
+  the old path's error shape — it does **not** retry through the
+  old in-memory path. A silent fallback could sell twice: the SQL
+  transaction may have failed after the sale was actually written
+  (for example a commit that timed out), and re-running the sale
+  in memory would create a second, duplicate sale. Failing loudly
+  lets the user retry explicitly with the same invoice number.
+- If the typed store is not ready (web, old tests, a v1
+  database), the old in-memory path runs exactly as before.
+- `isSqlSaleWriteEnabled(): boolean` is exported for tests and
+  for screens to adopt later.
+
+### Tests (`tests/sqlite-phase3.test.cjs`, real `node:sqlite`)
+
+- A successful SQL sale leaves every table consistent (sale +
+  items + allocations + deducted batches + stock movements +
+  customer/cash transactions + audit log), advances the counters,
+  leaves the in-memory store exactly matching the typed tables,
+  and returns a `SaleResult` identical to the legacy path's.
+- An injected failure mid-transaction (hook throwing at the
+  commit step) leaves zero rows changed in every table, memory
+  and counters untouched, and a retry with the same inputs
+  succeeds with the same invoice number.
+- Two consecutive sales for the last units: the first succeeds,
+  the second fails with a clean stock error and no partial trace.
+- Three consecutive SQL sales take sequential invoice numbers
+  with no duplicates or gaps (after the setup purchases, which
+  share the same `invoiceCounter`).
+- A plan built on stale stock is rejected by the guarded
+  `UPDATE` and rolls back.
+- The legacy path still works when the typed store is absent
+  (AsyncStorage backend) and writes nothing to SQLite.
+
+### What Phase 3 deliberately does NOT do
+
+- Purchases, sale/purchase returns and cancellations still use
+  the old in-memory path; only the sale write moved to SQL.
+- The in-memory store is still the source of truth for reads:
+  the SQL transaction writes first, then memory is updated from
+  the same plan. Removing the in-memory store is Phase 4 work.
+- Backup/restore and cloud sync behaviour are unchanged.
+
+## Phase 4 (proposed)
+
+- Move the remaining writes (purchases, returns, cancellations)
+  to SQL with the same plan-then-execute model, then make SQL the
+  single source of truth and remove the in-memory store.
 - Per-row `updated_at` triggers or application-level stamping for
   conflict detection, reusing the typed tables for the cloud-sync
   outbox instead of the JSON diff.
