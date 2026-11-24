@@ -7,14 +7,30 @@ import { withAtomicMutation } from './atomic-store';
 import { isPermissionAllowed } from './employee-permissions';
 import {
   AsyncStorageAdapter,
+  COLLECTION_NAMES,
   createDefaultAdapter,
   diffRows,
   rowsToSnapshot,
   snapshotToRows,
   type PersistenceAdapter,
+  type SnapshotDiff,
   type SnapshotRows,
   type StoredSnapshot,
 } from './sqlite-store';
+import {
+  getDashboardKpisSql,
+  getExpiryRadarSql,
+  getInventoryListSql,
+  getReportSummarySql,
+  type TypedDb,
+} from './sqlite-typed';
+import {
+  buildSaleWritePlan,
+  executeSaleTransaction,
+  type PlannedSaleItem,
+  type SalePlanInput,
+  type SaleWritePlan,
+} from './sqlite-writes';
 
 // ═══════════════════════════════════════════════════════════
 // TYPES & INTERFACES
@@ -36,6 +52,20 @@ export type BatchStatus = 'ACTIVE' | 'EXPIRED' | 'DEPLETED' | 'RECALLED';
 export type ReturnSettlementMethod = 'CASH_REFUND' | 'CUSTOMER_BALANCE' | 'CUSTOMER_CREDIT' | 'SUPPLIER_BALANCE';
 export type ReturnCondition = 'SELLABLE' | 'DAMAGED';
 
+// ─── Cloud sync identity ──────────────────────────────────────────
+/** Identity of a row for cloud sync (see docs/CLOUD_SYNC.md). Present on
+ * every synced row; optional so legacy snapshots load without them — the
+ * store backfills them on load and stamps them on every change.
+ * `syncId` is the global identity (remote `client_id`); the local numeric
+ * `id` never leaves the device and never identifies a row remotely.
+ * `updatedAt` is an ISO timestamp driving last-write-wins conflicts;
+ * `syncDeviceId` is the device that last wrote the row (tie-breaker). */
+export interface SyncFields {
+  syncId?: string;
+  updatedAt?: string;
+  syncDeviceId?: string;
+}
+
 // ─── Pharmacy ─────────────────────────────────────────────
 export interface Pharmacy {
   id: number;
@@ -53,7 +83,7 @@ export interface Pharmacy {
 }
 
 // ─── Users & Roles ────────────────────────────────────────
-export interface User {
+export interface User extends SyncFields {
   id: number;
   username: string;
   password_hash: string;
@@ -69,7 +99,7 @@ export interface User {
 }
 
 // ─── Products ─────────────────────────────────────────────
-export interface Product {
+export interface Product extends SyncFields {
   id: number;
   barcode: string | null;
   internal_code: string | null;
@@ -95,7 +125,7 @@ export interface Product {
   updated_at: string;
 }
 
-export interface ProductUnit {
+export interface ProductUnit extends SyncFields {
   id: number;
   product_id: number;
   unit_name: string;
@@ -111,7 +141,7 @@ export interface ProductUnit {
 }
 
 // ─── Batches ──────────────────────────────────────────────
-export interface Batch {
+export interface Batch extends SyncFields {
   id: number;
   product_id: number;
   batch_number: string;
@@ -132,7 +162,7 @@ export interface Batch {
 }
 
 // ─── Stock Movements ──────────────────────────────────────
-export interface StockMovement {
+export interface StockMovement extends SyncFields {
   id: number;
   product_id: number;
   batch_id: number | null;
@@ -148,7 +178,7 @@ export interface StockMovement {
 }
 
 // ─── Sales ────────────────────────────────────────────────
-export interface Sale {
+export interface Sale extends SyncFields {
   id: number;
   invoice_number: string;
   sale_type: SaleType;
@@ -173,7 +203,7 @@ export interface Sale {
   created_at: string;
 }
 
-export interface SaleItem {
+export interface SaleItem extends SyncFields {
   id: number;
   sale_id: number;
   product_id: number;
@@ -194,7 +224,7 @@ export interface SaleItem {
   cogs: number;
 }
 
-export interface SaleBatchAllocation {
+export interface SaleBatchAllocation extends SyncFields {
   id: number;
   sale_item_id: number;
   batch_id: number;
@@ -202,7 +232,7 @@ export interface SaleBatchAllocation {
   purchase_price: number;
 }
 
-export interface SalePayment {
+export interface SalePayment extends SyncFields {
   id: number;
   sale_id: number;
   amount: number;
@@ -213,7 +243,7 @@ export interface SalePayment {
 }
 
 // ─── Purchases ────────────────────────────────────────────
-export interface Purchase {
+export interface Purchase extends SyncFields {
   id: number;
   invoice_number: string;
   supplier_id: number | null;
@@ -233,7 +263,7 @@ export interface Purchase {
   created_at: string;
 }
 
-export interface PurchaseItem {
+export interface PurchaseItem extends SyncFields {
   id: number;
   purchase_id: number;
   product_id: number;
@@ -278,7 +308,7 @@ export interface SaleReturnItem {
   condition?: ReturnCondition;
 }
 
-export interface SaleReturn {
+export interface SaleReturn extends SyncFields {
   id: number;
   sale_id: number;
   return_number?: string;
@@ -317,7 +347,7 @@ export interface PurchaseReturnItem {
   previously_returned_quantity?: number;
 }
 
-export interface PurchaseReturn {
+export interface PurchaseReturn extends SyncFields {
   id: number;
   purchase_id: number;
   return_number?: string;
@@ -339,7 +369,7 @@ export interface PurchaseReturn {
 }
 
 // ─── Customers ────────────────────────────────────────────
-export interface Customer {
+export interface Customer extends SyncFields {
   id: number;
   name: string;
   phone: string | null;
@@ -350,7 +380,7 @@ export interface Customer {
   created_at: string;
 }
 
-export interface CustomerTransaction {
+export interface CustomerTransaction extends SyncFields {
   id: number;
   customer_id: number;
   type: 'sale' | 'payment' | 'return' | 'adjustment';
@@ -363,7 +393,7 @@ export interface CustomerTransaction {
 }
 
 // ─── Suppliers ────────────────────────────────────────────
-export interface Supplier {
+export interface Supplier extends SyncFields {
   id: number;
   name: string;
   phone: string | null;
@@ -374,7 +404,7 @@ export interface Supplier {
   created_at: string;
 }
 
-export interface SupplierTransaction {
+export interface SupplierTransaction extends SyncFields {
   id: number;
   supplier_id: number;
   type: 'purchase' | 'payment' | 'return' | 'adjustment';
@@ -395,7 +425,7 @@ export const CASHBOXES: readonly CashboxDefinition[] = [
   { id: 'bank', label: 'صندوق الصراف / البنك', shortLabel: 'الصراف / البنك' },
 ];
 
-export interface CashTransaction {
+export interface CashTransaction extends SyncFields {
   id: number;
   type: 'SALE_CASH' | 'COLLECTION' | 'PURCHASE_PAYMENT' | 'SUPPLIER_PAYMENT'
       | 'CUSTOMER_REFUND' | 'PURCHASE_RETURN' | 'EXPENSE' | 'WITHDRAWAL' | 'DEPOSIT' | 'OPENING' | 'CLOSING' | 'ADJUSTMENT'
@@ -413,7 +443,7 @@ export interface CashTransaction {
 }
 
 // ─── Shifts ───────────────────────────────────────────────
-export interface Shift {
+export interface Shift extends SyncFields {
   id: number;
   user_id: number | null;
   user_name: string | null;
@@ -433,7 +463,7 @@ export interface Shift {
 }
 
 // ─── Expenses ─────────────────────────────────────────────
-export interface Expense {
+export interface Expense extends SyncFields {
   id: number;
   category: string;
   amount: number;
@@ -446,7 +476,7 @@ export interface Expense {
 }
 
 // ─── Audit ────────────────────────────────────────────────
-export interface AuditLog {
+export interface AuditLog extends SyncFields {
   id: number;
   user_id: number | null;
   user_name: string | null;
@@ -529,6 +559,22 @@ export interface InventoryItem {
   batches: Batch[];
 }
 
+// ─── Cloud sync outbox ────────────────────────────────────────────
+/** One pending cloud-sync change. Built from the persistence diff in
+ * persistStore(), so every local mutation is recorded exactly once per
+ * row (repeated edits merge into the latest entry). Entries are removed
+ * only after a successful push (see clearSyncedOutbox). The outbox is
+ * part of the store, so it survives restarts like any other collection;
+ * it is never itself recorded in the outbox. */
+export interface SyncOutboxEntry extends SyncFields {
+  id: number;
+  collection: string;
+  op: 'upsert' | 'delete';
+  attempts: number;
+  lastError: string | null;
+  createdAt: string;
+}
+
 // ═══════════════════════════════════════════════════════════
 // IN-MEMORY STORE
 // ═══════════════════════════════════════════════════════════
@@ -557,6 +603,7 @@ const store = {
   shifts: [] as Shift[],
   expenses: [] as Expense[],
   auditLogs: [] as AuditLog[],
+  syncOutbox: [] as SyncOutboxEntry[],
 };
 
 const ids = {
@@ -566,7 +613,7 @@ const ids = {
   purchases: 1, purchaseItems: 1,
   customers: 1, customerTx: 1,
   suppliers: 1, supplierTx: 1,
-  cashTx: 1, shifts: 1, expenses: 1, auditLogs: 1, users: 1,
+  cashTx: 1, shifts: 1, expenses: 1, auditLogs: 1, users: 1, syncOutbox: 1,
 };
 
 let invoiceCounter = 1000;
@@ -597,6 +644,8 @@ export function setPersistenceBackend(adapter: PersistenceAdapter): void {
   persistenceBackend = adapter;
   lastSavedRows = null;
   migrationStatus.migratedFromAsyncStorage = false;
+  typedStoreReady = null;
+  typedSchemaVersion = null;
 }
 
 export function getPersistenceBackendName(): string {
@@ -626,6 +675,399 @@ function takeSnapshotRows(): SnapshotRows {
   return snapshotToRows(snapshot);
 }
 
+// ─── Typed store (Phase 2: SQLite) ────────────────────────────────
+// The public read functions below stay synchronous and keep computing
+// from the in-memory store — expo-sqlite is async, so a synchronous
+// function cannot query it without changing its signature. The `*Async`
+// variants next to them prefer the SQL query layer when the typed
+// tables are ready and fall back to the in-memory computation on any
+// failure (wrong backend, migration not run, SQL error), so a read can
+// never fail because of the typed store. The cached readiness flag is
+// reset whenever the backend is swapped.
+//
+// Note: erp-database.ts must never import node:sqlite or expo-sqlite;
+// the adapter owns the database handle and hands out a TypedDb.
+
+let typedStoreReady: boolean | null = null;
+let typedSchemaVersion: string | null = null;
+
+/** Run the v2 migration if needed and report whether SQL reads are usable. */
+export async function ensureTypedStoreReady(): Promise<boolean> {
+  if (typedStoreReady === true) return true;
+  try {
+    const ensure = persistenceBackend.ensureTypedTables;
+    if (typeof ensure !== 'function') {
+      typedStoreReady = false;
+      return false;
+    }
+    const ready = await ensure.call(persistenceBackend);
+    typedStoreReady = ready;
+    if (ready) {
+      const version = await persistenceBackend.getMeta?.('schema_version');
+      typedSchemaVersion = typeof version === 'string' ? version : null;
+    }
+    return ready;
+  } catch {
+    typedStoreReady = false;
+    return false;
+  }
+}
+
+/** Cached typed-store readiness (false until ensureTypedStoreReady() succeeds). */
+export function isTypedStoreReady(): boolean {
+  return typedStoreReady === true;
+}
+
+/** Typed-store readiness and schema version, for tests and system-tools. */
+export function getTypedStoreStatus(): { ready: boolean; schemaVersion: string | null } {
+  return { ready: typedStoreReady === true, schemaVersion: typedSchemaVersion };
+}
+
+/** Run a query against the typed tables, or return null to use the
+ * in-memory fallback. Any failure is swallowed (and warned about) here
+ * so SQL problems can never break a read. */
+async function withTypedDb<T>(query: (db: TypedDb) => Promise<T>): Promise<T | null> {
+  try {
+    if (!(await ensureTypedStoreReady())) return null;
+    const getDb = persistenceBackend.getTypedDb;
+    if (typeof getDb !== 'function') return null;
+    const db = await getDb.call(persistenceBackend);
+    if (!db) return null;
+    return await query(db);
+  } catch (error) {
+    console.warn('[typed-store] SQL read failed, using in-memory fallback', error);
+    return null;
+  }
+}
+
+/** getDashboardKpis, preferring SQL for the SQL-computable fields. */
+export async function getDashboardKpisAsync(): Promise<DashboardKpis> {
+  const base = getDashboardKpis();
+  const sql = await withTypedDb(db => getDashboardKpisSql(db, today()));
+  if (!sql) return base;
+  return {
+    ...base,
+    todaySales: sql.todaySales,
+    todayCashSales: sql.todayCashSales,
+    todayCreditSales: sql.todayCreditSales,
+    lowStockCount: sql.lowStockCount,
+    expiringCount: sql.expiringCount,
+    expiredCount: sql.expiredCount,
+    outOfStockCount: sql.outOfStockCount,
+  };
+}
+
+/** getReportSummary, preferring the full SQL computation when ready. */
+export async function getReportSummaryAsync(dateFrom: string, dateTo: string): Promise<ReportSummary> {
+  const sql = await withTypedDb(db => getReportSummarySql(db, dateFrom, dateTo));
+  return sql ?? getReportSummary(dateFrom, dateTo);
+}
+
+/** getExpiryRadar, preferring SQL when the typed store is ready. */
+export async function getExpiryRadarAsync(): Promise<ExpiryRadarItem[]> {
+  const sql = await withTypedDb(db => getExpiryRadarSql(db, { today: today() }));
+  return sql ?? getExpiryRadar();
+}
+
+/** getInventoryList, preferring SQL when the typed store is ready. */
+export async function getInventoryListAsync(opts?: {
+  search?: string; status?: string; category?: string;
+}): Promise<InventoryItem[]> {
+  const sql = await withTypedDb(db => getInventoryListSql(db, opts, { today: today() }));
+  return sql ?? getInventoryList(opts);
+}
+
+/** Inventory items with status 'low', preferring SQL when ready. */
+export async function getLowStockProductsAsync(): Promise<InventoryItem[]> {
+  return getInventoryListAsync({ status: 'low' });
+}
+
+// ─── Cloud sync: identity, device, outbox ─────────────────────────
+// See docs/CLOUD_SYNC.md. The outbox is built here, in persistStore(),
+// because every mutation in this module funnels through it — no service
+// function needs to know about sync. The sync engine itself lives in
+// services/cloud-sync.ts and only uses the exported helpers below.
+
+/** Collections that may leave the device. `users` (local accounts with
+ * password hashes) and the `syncOutbox` itself never sync. */
+export const SYNCABLE_COLLECTIONS = (COLLECTION_NAMES as readonly string[]).filter(
+  name => name !== 'users' && name !== 'syncOutbox',
+);
+
+/** Local numeric-id counter key per collection, for rows pulled from the
+ * cloud (they arrive with a syncId but without a local numeric id). */
+const IDS_KEY_BY_COLLECTION: Record<string, string> = {
+  products: 'products',
+  productUnits: 'productUnits',
+  batches: 'batches',
+  stockMovements: 'stockMovements',
+  sales: 'sales',
+  saleItems: 'saleItems',
+  saleBatchAllocations: 'saleAllocations',
+  salePayments: 'salePayments',
+  saleReturns: 'saleReturns',
+  purchases: 'purchases',
+  purchaseItems: 'purchaseItems',
+  purchaseReturns: 'purchaseReturns',
+  customers: 'customers',
+  customerTransactions: 'customerTx',
+  suppliers: 'suppliers',
+  supplierTransactions: 'supplierTx',
+  cashTransactions: 'cashTx',
+  shifts: 'shifts',
+  expenses: 'expenses',
+  auditLogs: 'auditLogs',
+};
+
+let outboxSuppressCount = 0;
+let persistInProgress = false;
+
+const isoNow = () => new Date().toISOString();
+
+/** Generate a UUID v4. Uses crypto.randomUUID() when available; the
+ * fallback keeps the same shape from time + randomness. */
+export function generateSyncId(): string {
+  try {
+    const c = (globalThis as unknown as { crypto?: { randomUUID?: () => string } }).crypto;
+    if (c?.randomUUID) return c.randomUUID();
+  } catch {
+    // Fall through to the fallback below.
+  }
+  const hex = (n: number) => {
+    let out = '';
+    for (let i = 0; i < n; i++) out += Math.floor(Math.random() * 16).toString(16);
+    return out;
+  };
+  const variant = ['8', '9', 'a', 'b'][Math.floor(Math.random() * 4)];
+  return `${hex(8)}-${hex(4)}-4${hex(3)}-${variant}${hex(3)}-${hex(12)}`;
+}
+
+/** Stable per-device id, kept as a setting (settings never sync). This
+ * never calls persistStore() itself: the in-flight persist writes the
+ * setting, and any other caller persists it on its next write. */
+export function getSyncDeviceId(): string {
+  let id = store.settings['sync_device_id'];
+  if (!id) {
+    id = generateSyncId();
+    store.settings['sync_device_id'] = id;
+  }
+  return id;
+}
+
+/** Assign a sync identity to a row that lacks one. `updatedAt` falls back
+ * to the row's created_at (or now) so a legacy row keeps its original age
+ * instead of looking brand new on its first sync. */
+function ensureSyncFields(row: Record<string, unknown>): void {
+  if (typeof row['syncId'] !== 'string' || !row['syncId']) row['syncId'] = generateSyncId();
+  if (typeof row['updatedAt'] !== 'string' || !row['updatedAt']) {
+    const created = typeof row['created_at'] === 'string' ? (row['created_at'] as string) : '';
+    row['updatedAt'] = created || isoNow();
+  }
+  if (typeof row['syncDeviceId'] !== 'string' || !row['syncDeviceId']) {
+    row['syncDeviceId'] = getSyncDeviceId();
+  }
+}
+
+function ensureSyncFieldsForAllRows(): void {
+  for (const name of COLLECTION_NAMES as readonly string[]) {
+    if (name === 'syncOutbox') continue;
+    const list = (store as Record<string, unknown>)[name];
+    if (!Array.isArray(list)) continue;
+    for (const row of list as Array<Record<string, unknown>>) ensureSyncFields(row);
+  }
+}
+
+function findLiveRow(collection: string, rowId: number): Record<string, unknown> | null {
+  const list = (store as Record<string, unknown>)[collection];
+  if (!Array.isArray(list)) return null;
+  return (list as Array<Record<string, unknown>>).find(r => r?.['id'] === rowId) ?? null;
+}
+
+function parseRowData(data: string): Record<string, unknown> | null {
+  try {
+    const value: unknown = JSON.parse(data);
+    return value && typeof value === 'object' && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Record outbox entries for one persistence diff. Repeated edits of the
+ * same row merge into a single entry holding the latest op; a delete
+ * always replaces an earlier upsert for the same row. Outbox rows
+ * themselves and non-syncable collections are skipped, and the `at`
+ * timestamp (the stamp time of this write) is the entry's updatedAt. */
+function recordOutboxEntries(diff: SnapshotDiff, at: string): void {
+  const savedByKey = new Map<string, string>();
+  if (lastSavedRows) {
+    for (const row of lastSavedRows.rows) savedByKey.set(`${row.collection}:${row.rowId}`, row.data);
+  }
+  const bySyncId = new Map(store.syncOutbox.map(entry => [entry.syncId, entry]));
+  const apply = (syncId: string, collection: string, op: 'upsert' | 'delete') => {
+    const existing = bySyncId.get(syncId);
+    if (existing) {
+      existing.op = op;
+      existing.collection = collection;
+      existing.updatedAt = at;
+      existing.attempts = 0;
+      existing.lastError = null;
+    } else {
+      const entry: SyncOutboxEntry = {
+        id: ids.syncOutbox++,
+        collection,
+        syncId,
+        op,
+        updatedAt: at,
+        attempts: 0,
+        lastError: null,
+        createdAt: at,
+      };
+      store.syncOutbox.push(entry);
+      bySyncId.set(syncId, entry);
+    }
+  };
+  for (const row of diff.upserts) {
+    if (row.collection === 'syncOutbox' || !SYNCABLE_COLLECTIONS.includes(row.collection)) continue;
+    const parsed = parseRowData(row.data);
+    const syncId = parsed?.['syncId'];
+    if (typeof syncId !== 'string' || !syncId) continue;
+    apply(syncId, row.collection, 'upsert');
+  }
+  for (const deleted of diff.deletes) {
+    if (deleted.collection === 'syncOutbox' || !SYNCABLE_COLLECTIONS.includes(deleted.collection)) continue;
+    const parsed = parseRowData(savedByKey.get(`${deleted.collection}:${deleted.rowId}`) ?? '');
+    const syncId = parsed?.['syncId'];
+    if (typeof syncId !== 'string' || !syncId) continue;
+    apply(syncId, deleted.collection, 'delete');
+  }
+}
+
+/** Number of local changes waiting to be pushed to the cloud. */
+export function getPendingSyncCount(): number {
+  return store.syncOutbox.length;
+}
+
+/** A copy of the pending outbox (for the sync engine and the UI). */
+export function getSyncOutboxSnapshot(): SyncOutboxEntry[] {
+  return store.syncOutbox.map(entry => ({ ...entry }));
+}
+
+/** Remove the outbox entries that were pushed successfully. */
+export function clearSyncedOutbox(syncIds: string[]): void {
+  if (syncIds.length === 0) return;
+  const wanted = new Set(syncIds);
+  store.syncOutbox = store.syncOutbox.filter(entry => !wanted.has(entry.syncId ?? ''));
+  persistStore();
+}
+
+/** Record a failed push attempt on entries (kept for retry). */
+export function noteOutboxFailure(syncIds: string[], message: string): void {
+  if (syncIds.length === 0) return;
+  const wanted = new Set(syncIds);
+  let changed = false;
+  for (const entry of store.syncOutbox) {
+    if (wanted.has(entry.syncId ?? '')) {
+      entry.attempts += 1;
+      entry.lastError = message;
+      changed = true;
+    }
+  }
+  if (changed) persistStore();
+}
+
+/** Run `fn` without recording outbox entries (used by the sync engine
+ * when applying rows pulled from the cloud, so a pull never echoes
+ * back into the outbox and the sync cannot loop). */
+export function withOutboxSuppressed<T>(fn: () => T): T {
+  outboxSuppressCount += 1;
+  try {
+    return fn();
+  } finally {
+    outboxSuppressCount -= 1;
+  }
+}
+
+/** The live local row with this syncId, or null. Read-only: the sync
+ * engine maps it immediately and never mutates it. */
+export function getLocalRowBySyncId(
+  collection: string,
+  syncId: string,
+): Record<string, unknown> | null {
+  const list = (store as Record<string, unknown>)[collection];
+  if (!Array.isArray(list)) return null;
+  return (list as Array<Record<string, unknown>>).find(row => row?.['syncId'] === syncId) ?? null;
+}
+
+/** Copies of every local row in a collection (for the sync engine's
+ * foreign-key resolution). */
+export function getAllLocalRows(collection: string): Array<Record<string, unknown>> {
+  const list = (store as Record<string, unknown>)[collection];
+  if (!Array.isArray(list)) return [];
+  return (list as Array<Record<string, unknown>>).map(row => ({ ...row }));
+}
+
+/** Give nested return-line items their parent return's local id. */
+function patchReturnItems(row: Record<string, unknown>, returnId: number): void {
+  const items = row['items'];
+  if (!Array.isArray(items)) return;
+  for (const item of items as Array<Record<string, unknown>>) {
+    if (item && typeof item === 'object') item['return_id'] = returnId;
+  }
+}
+
+/**
+ * Apply rows pulled from the cloud to one collection, plus remote deletes.
+ * Rows are matched by syncId: an existing row is replaced in place (keeping
+ * its local numeric id); a new row gets the next local id. The caller wraps
+ * this in withOutboxSuppressed() and persists once at the end.
+ */
+export function applyPulledChanges(
+  collection: string,
+  rows: Array<Record<string, unknown>>,
+  deletedSyncIds: string[],
+): void {
+  const list = (store as Record<string, unknown>)[collection];
+  if (!Array.isArray(list)) return;
+  const arr = list as Array<Record<string, unknown>>;
+  const bySyncId = new Map<string, Record<string, unknown>>();
+  for (const row of arr) {
+    if (typeof row['syncId'] === 'string' && row['syncId']) bySyncId.set(row['syncId'], row);
+  }
+  for (const row of rows) {
+    const syncId = row['syncId'];
+    if (typeof syncId !== 'string' || !syncId) continue;
+    const existing = bySyncId.get(syncId);
+    if (existing) {
+      const localId = existing['id'];
+      for (const key of Object.keys(existing)) delete existing[key];
+      Object.assign(existing, row, { id: localId });
+      // Nested return-line items carry the parent's local id, which the
+      // mapper cannot know before the parent exists locally.
+      if ((collection === 'saleReturns' || collection === 'purchaseReturns') && typeof localId === 'number') {
+        patchReturnItems(existing, localId);
+      }
+    } else {
+      const counterKey = IDS_KEY_BY_COLLECTION[collection];
+      const nextId = counterKey ? (ids as Record<string, number>)[counterKey]++ : 0;
+      const created = { ...row, id: nextId };
+      if (collection === 'saleReturns' || collection === 'purchaseReturns') {
+        patchReturnItems(created, nextId);
+      }
+      arr.push(created);
+      bySyncId.set(syncId, created);
+    }
+  }
+  if (deletedSyncIds.length > 0) {
+    const doomed = new Set(deletedSyncIds);
+    (store as Record<string, unknown>)[collection] = arr.filter(
+      row => typeof row['syncId'] !== 'string' || !doomed.has(row['syncId']),
+    );
+  }
+  persistStore();
+}
+
 function persistStore(): void {
   // Inside an atomic commit, defer the write: addAuditLog() during the
   // commit must not persist an intermediate snapshot (see
@@ -635,25 +1077,60 @@ function persistStore(): void {
     persistDeferred = true;
     return;
   }
-  // Rows are serialised strings, detached from the live store, so the
-  // queued write cannot observe later mutations.
-  const rows = takeSnapshotRows();
-  const diff = lastSavedRows ? diffRows(lastSavedRows, rows) : null;
-  // Keep the queue recoverable for later writes, but do not erase the current
-  // write's failure. Callers that need durability must await flushDatabaseWrites().
-  persistQueue = persistQueue
-    .catch(() => undefined)
-    .then(async () => {
-      if (diff && persistenceBackend.saveDiff) {
-        await persistenceBackend.saveDiff(diff);
-      } else {
-        await persistenceBackend.saveSnapshot(rowsToSnapshot(rows));
+  persistInProgress = true;
+  try {
+    // Every row gets a sync identity first, so the diff below always
+    // carries syncIds (including legacy rows and rows created by code
+    // paths that never set one explicitly).
+    ensureSyncFieldsForAllRows();
+    const beforeRows = takeSnapshotRows();
+    const beforeDiff = lastSavedRows ? diffRows(lastSavedRows, beforeRows) : null;
+    const stampAt = isoNow();
+    if (beforeDiff) {
+      // Stamp exactly the rows this write changes, so the outbox and the
+      // remote copy carry a fresh updatedAt for those rows only. Rows
+      // untouched by this write keep their old timestamp. Rows applied
+      // from a pull (outbox suppressed) are never re-stamped: their
+      // remote updatedAt is the truth, and stamping them "now" would make
+      // a stale copy look newer than a later remote edit.
+      if (outboxSuppressCount === 0) {
+        for (const upsert of beforeDiff.upserts) {
+          if (upsert.collection === 'syncOutbox') continue;
+          const live = findLiveRow(upsert.collection, upsert.rowId);
+          if (live) {
+            live['updatedAt'] = stampAt;
+            live['syncDeviceId'] = getSyncDeviceId();
+          }
+        }
+        recordOutboxEntries(beforeDiff, stampAt);
       }
-      lastSavedRows = rows;
-    });
-  // Prevent an unhandled-rejection warning for legacy synchronous callers.
-  // The original promise remains rejected and is observable via flushDatabaseWrites().
-  void persistQueue.catch(() => undefined);
+    } else if (outboxSuppressCount === 0) {
+      // First persist after load with no saved baseline: everything in
+      // the store is pending upload, so record it exactly once.
+      recordOutboxEntries(diffRows({ meta: [], rows: [] }, beforeRows), stampAt);
+    }
+    // Rows are serialised strings, detached from the live store, so the
+    // queued write cannot observe later mutations.
+    const rows = takeSnapshotRows();
+    const diff = lastSavedRows ? diffRows(lastSavedRows, rows) : null;
+    // Keep the queue recoverable for later writes, but do not erase the current
+    // write's failure. Callers that need durability must await flushDatabaseWrites().
+    persistQueue = persistQueue
+      .catch(() => undefined)
+      .then(async () => {
+        if (diff && persistenceBackend.saveDiff) {
+          await persistenceBackend.saveDiff(diff);
+        } else {
+          await persistenceBackend.saveSnapshot(rowsToSnapshot(rows));
+        }
+        lastSavedRows = rows;
+      });
+    // Prevent an unhandled-rejection warning for legacy synchronous callers.
+    // The original promise remains rejected and is observable via flushDatabaseWrites().
+    void persistQueue.catch(() => undefined);
+  } finally {
+    persistInProgress = false;
+  }
 }
 
 /** Resolve only after all writes queued so far have reached device storage. */
@@ -769,6 +1246,36 @@ function applySnapshot(saved: LooseSnapshot): void {
   }
   if (saved.ids) Object.assign(ids, saved.ids);
   if (typeof saved.invoiceCounter === 'number') invoiceCounter = saved.invoiceCounter;
+  // A stored counter must never fall behind the rows it already issued:
+  // a stale meta (e.g. a write that reached disk after a newer one, or a
+  // snapshot whose counters predate its rows) must not reuse an id or an
+  // invoice number. Only raises counters, never lowers them.
+  for (const [collection, counterKey] of Object.entries({
+    ...IDS_KEY_BY_COLLECTION,
+    users: 'users',
+    syncOutbox: 'syncOutbox',
+  })) {
+    const list = (store as Record<string, unknown>)[collection];
+    if (!Array.isArray(list)) continue;
+    let maxId = 0;
+    for (const row of list as Array<Record<string, unknown>>) {
+      const value = row?.['id'];
+      if (typeof value === 'number' && Number.isFinite(value)) maxId = Math.max(maxId, value);
+    }
+    const current = (ids as Record<string, number>)[counterKey];
+    if (typeof current === 'number') (ids as Record<string, number>)[counterKey] = Math.max(current, maxId + 1);
+  }
+  invoiceCounter = Math.max(invoiceCounter, maxInvoiceNumberFromSales());
+  // Backfill sync identity on legacy rows (loaded before sync existed, or
+  // restored from an old backup): they get a syncId now and the next
+  // persist records them in the outbox, so they upload on the first sync.
+  // Rows that already carry a syncId are untouched.
+  for (const name of COLLECTION_NAMES as readonly string[]) {
+    if (name === 'syncOutbox') continue;
+    const list = (store as Record<string, unknown>)[name];
+    if (!Array.isArray(list)) continue;
+    for (const row of list as Array<Record<string, unknown>>) ensureSyncFields(row);
+  }
 }
 
 /** Preserve a corrupt legacy AsyncStorage snapshot under a unique
@@ -1742,238 +2249,480 @@ export interface SaleResult {
   error?: string;
 }
 
-export function createSale(data: NewSale, actor?: User | null): SaleResult {
-  const saleDenied = checkPermission(actor, 'sales.create', 'sale')
+function salePermissionError(data: NewSale, actor?: User | null): string | null {
+  return checkPermission(actor, 'sales.create', 'sale')
     ?? ((data.sale_type === 'credit' || data.sale_type === 'mixed') && data.customer_id
       ? checkPermission(actor, 'customers.credit', 'sale') : null);
-  if (saleDenied) return { success: false, error: saleDenied };
-  try {
-    if (!data.items.length) return { success: false, error: 'أضف صنفًا واحدًا على الأقل' };
-    if (!Number.isFinite(data.discount) || data.discount < 0 || !Number.isFinite(data.amount_paid) || data.amount_paid < 0) {
-      return { success: false, error: 'قيمة الخصم أو المبلغ المدفوع غير صحيحة' };
+}
+
+/** A sale fully validated and resolved, without any mutation. Shared by
+ * the legacy in-memory path and the SQL path (Phase 3), so both paths
+ * validate, price and allocate identically. */
+interface PreparedSaleItem {
+  item: NewSaleItem;
+  product: Product;
+  qty_in_inv_unit: number;
+  allocations: FefoAllocation[];
+  line_total: number;
+  item_cogs: number;
+  base_purchase_price: number;
+}
+
+interface PreparedSale {
+  data: NewSale;
+  items: PreparedSaleItem[];
+  subtotal: number;
+  total: number;
+  amount_paid: number;
+  change_given: number;
+  remaining: number;
+  total_cogs: number;
+  sale_date: string;
+  customer: Customer | null;
+  customer_name: string | null;
+  customer_balance_after: number | null;
+  shift: Shift | null;
+}
+
+/** Validate a sale and resolve units + FEFO allocations without mutating
+ * anything. Returns the first validation error, if any. */
+function prepareSale(data: NewSale): { ok: true; prepared: PreparedSale } | { ok: false; error: string } {
+  if (!data.items.length) return { ok: false, error: 'أضف صنفًا واحدًا على الأقل' };
+  if (!Number.isFinite(data.discount) || data.discount < 0 || !Number.isFinite(data.amount_paid) || data.amount_paid < 0) {
+    return { ok: false, error: 'قيمة الخصم أو المبلغ المدفوع غير صحيحة' };
+  }
+  // Validate items and resolve units
+  const resolvedItems: PreparedSaleItem[] = [];
+  const reserved = new Map<number, number>();
+
+  for (const item of data.items) {
+    const product = getProduct(item.product_id);
+    if (!product) return { ok: false, error: `منتج غير موجود: ${item.product_id}` };
+    if (!isValidUnitQuantity(item.quantity, item.unit) || !Number.isFinite(item.unit_price) || item.unit_price < 0 ||
+        !Number.isFinite(item.discount) || item.discount < 0 || item.discount > item.quantity * item.unit_price) {
+      return { ok: false, error: `تحقق من الكمية والسعر والخصم للصنف ${product.trade_name}` };
     }
-    // Validate items and resolve units
-    const resolvedItems: (NewSaleItem & { qty_in_inv_unit: number; allocations: FefoAllocation[] })[] = [];
-    const reserved = new Map<number, number>();
+    const factor = getUnitConversionFactor(item.product_id, item.unit);
+    if (factor === null) return { ok: false, error: `الوحدة ${item.unit} غير معرفة للصنف ${product.trade_name}` };
+    const qtyInInvUnit = toBaseQuantity(item.quantity, factor);
 
-    for (const item of data.items) {
-      const product = getProduct(item.product_id);
-      if (!product) return { success: false, error: `منتج غير موجود: ${item.product_id}` };
-      if (!isValidUnitQuantity(item.quantity, item.unit) || !Number.isFinite(item.unit_price) || item.unit_price < 0 ||
-          !Number.isFinite(item.discount) || item.discount < 0 || item.discount > item.quantity * item.unit_price) {
-        return { success: false, error: `تحقق من الكمية والسعر والخصم للصنف ${product.trade_name}` };
-      }
-      const factor = getUnitConversionFactor(item.product_id, item.unit);
-      if (factor === null) return { success: false, error: `الوحدة ${item.unit} غير معرفة للصنف ${product.trade_name}` };
-      const qtyInInvUnit = toBaseQuantity(item.quantity, factor);
-
-      // FEFO allocation
-      const allocs = allocateFefo(item.product_id, qtyInInvUnit, reserved);
-      if (!allocs) {
-        return { success: false, error: `المخزون غير كافٍ: ${product.trade_name}` };
-      }
-      allocs.forEach(allocation => reserved.set(allocation.batch_id, (reserved.get(allocation.batch_id) || 0) + allocation.quantity));
-
-      resolvedItems.push({ ...item, qty_in_inv_unit: qtyInInvUnit, allocations: allocs });
+    // FEFO allocation
+    const allocs = allocateFefo(item.product_id, qtyInInvUnit, reserved);
+    if (!allocs) {
+      return { ok: false, error: `المخزون غير كافٍ: ${product.trade_name}` };
     }
+    allocs.forEach(allocation => reserved.set(allocation.batch_id, (reserved.get(allocation.batch_id) || 0) + allocation.quantity));
 
-    // Calculate totals
-    let subtotal = 0;
-    for (const item of resolvedItems) {
-      const lineTotal = item.quantity * item.unit_price - item.discount;
-      subtotal += lineTotal;
+    const lineTotal = item.quantity * item.unit_price - item.discount;
+    let itemCogs = 0;
+    for (const alloc of allocs) {
+      itemCogs += alloc.quantity * alloc.purchase_price;
     }
-    if (data.discount > subtotal) return { success: false, error: 'خصم الفاتورة أكبر من مجموع الأصناف' };
-    const total = subtotal - data.discount;
-    const amountPaid = Math.min(data.amount_paid, total);
-    const remaining = total - amountPaid;
-    const changeGiven = data.amount_paid > total ? data.amount_paid - total : 0;
+    resolvedItems.push({
+      item, product, qty_in_inv_unit: qtyInInvUnit, allocations: allocs,
+      line_total: lineTotal, item_cogs: itemCogs,
+      base_purchase_price: qtyInInvUnit > 0 ? itemCogs / qtyInInvUnit : 0,
+    });
+  }
 
-    const saleDate = data.date || today();
-    if (!isValidIsoDate(saleDate)) return { success: false, error: 'تاريخ فاتورة البيع غير صحيح' };
-    if (!Number.isFinite(data.amount_paid) || data.amount_paid < 0) return { success: false, error: 'المبلغ المدفوع غير صحيح' };
-    // Credit limit: refuse a credit/mixed sale whose remaining balance would
-    // push the customer over their limit. Checked before any mutation.
-    if ((data.sale_type === 'credit' || data.sale_type === 'mixed') && data.customer_id) {
-      const limitCheck = checkCreditLimit(data.customer_id, remaining);
-      if (limitCheck && limitCheck.credit_limit > 0 && !limitCheck.allowed) {
-        return { success: false, error: 'تجاوز حد الائتمان للعميل: الرصيد الحالي + المتبقي من هذه الفاتورة يتجاوز الحد المسموح' };
-      }
+  // Calculate totals
+  let subtotal = 0;
+  let totalCogs = 0;
+  for (const item of resolvedItems) {
+    subtotal += item.line_total;
+    totalCogs += item.item_cogs;
+  }
+  if (data.discount > subtotal) return { ok: false, error: 'خصم الفاتورة أكبر من مجموع الأصناف' };
+  const total = subtotal - data.discount;
+  const amountPaid = Math.min(data.amount_paid, total);
+  const remaining = total - amountPaid;
+  const changeGiven = data.amount_paid > total ? data.amount_paid - total : 0;
+
+  const saleDate = data.date || today();
+  if (!isValidIsoDate(saleDate)) return { ok: false, error: 'تاريخ فاتورة البيع غير صحيح' };
+  if (!Number.isFinite(data.amount_paid) || data.amount_paid < 0) return { ok: false, error: 'المبلغ المدفوع غير صحيح' };
+  // Credit limit: refuse a credit/mixed sale whose remaining balance would
+  // push the customer over their limit. Checked before any mutation.
+  if ((data.sale_type === 'credit' || data.sale_type === 'mixed') && data.customer_id) {
+    const limitCheck = checkCreditLimit(data.customer_id, remaining);
+    if (limitCheck && limitCheck.credit_limit > 0 && !limitCheck.allowed) {
+      return { ok: false, error: 'تجاوز حد الائتمان للعميل: الرصيد الحالي + المتبقي من هذه الفاتورة يتجاوز الحد المسموح' };
     }
-    // Commit invoice, inventory, balances, cash and audit as one rollback-capable mutation.
-    return commitReturnAtomically(() => {
-    // Create sale record
-    const sale: Sale = {
-      id: ids.sales++,
-      invoice_number: nextInvoice(),
-      sale_type: data.sale_type,
-      customer_id: data.customer_id ?? null,
-      customer_name: data.customer_id
-        ? (store.customers.find(c => c.id === data.customer_id)?.name ?? null)
-        : null,
-      subtotal,
-      discount: data.discount,
-      total,
-      amount_paid: amountPaid,
-      change_given: changeGiven,
-      remaining,
-      cogs: 0,
-      gross_profit: 0,
-      date: saleDate,
-      shift_id: data.shift_id ?? null,
-      user_id: data.user_id ?? null,
-      notes: data.notes ?? null,
-      cancelled: false,
-      cancelled_by: null,
-      cancelled_at: null,
-      cancel_reason: null,
-      created_at: now(),
+  }
+
+  const customer = data.customer_id ? (store.customers.find(c => c.id === data.customer_id) ?? null) : null;
+  const customerBalanceAfter =
+    ((data.sale_type === 'credit' || remaining > 0) && customer) ? customer.balance + remaining : null;
+  const shift = data.shift_id ? (store.shifts.find(s => s.id === data.shift_id) ?? null) : null;
+  return {
+    ok: true,
+    prepared: {
+      data, items: resolvedItems, subtotal, total, amount_paid: amountPaid,
+      change_given: changeGiven, remaining, total_cogs: totalCogs, sale_date: saleDate,
+      customer, customer_name: customer?.name ?? null,
+      customer_balance_after: customerBalanceAfter, shift,
+    },
+  };
+}
+
+/** The legacy in-memory sale mutation, applied to a prepared sale. Must
+ * be called inside commitReturnAtomically() (it relies on the deferred
+ * persist + rollback). Its behaviour is unchanged from the pre-Phase-3
+ * createSale. */
+function executePreparedSaleInMemory(prepared: PreparedSale): SaleResult {
+  const data = prepared.data;
+  const resolvedItems = prepared.items;
+  const subtotal = prepared.subtotal;
+  const total = prepared.total;
+  const amountPaid = prepared.amount_paid;
+  const changeGiven = prepared.change_given;
+  const remaining = prepared.remaining;
+  const saleDate = prepared.sale_date;
+  // Create sale record
+  const sale: Sale = {
+    id: ids.sales++,
+    invoice_number: nextInvoice(),
+    sale_type: data.sale_type,
+    customer_id: data.customer_id ?? null,
+    customer_name: prepared.customer_name,
+    subtotal,
+    discount: data.discount,
+    total,
+    amount_paid: amountPaid,
+    change_given: changeGiven,
+    remaining,
+    cogs: 0,
+    gross_profit: 0,
+    date: saleDate,
+    shift_id: data.shift_id ?? null,
+    user_id: data.user_id ?? null,
+    notes: data.notes ?? null,
+    cancelled: false,
+    cancelled_by: null,
+    cancelled_at: null,
+    cancel_reason: null,
+    created_at: now(),
+  };
+
+  let totalCogs = 0;
+
+  // Create sale items + batch allocations + stock movements
+  for (const item of resolvedItems) {
+    const lineTotal = item.line_total;
+    const itemCogs = item.item_cogs;
+
+    const saleItem: SaleItem = {
+      id: ids.saleItems++,
+      sale_id: sale.id,
+      product_id: item.item.product_id,
+      product_name: item.product.trade_name,
+      batch_id: item.allocations[0]?.batch_id ?? null,
+      unit: item.item.unit,
+      quantity: item.item.quantity,
+      unit_name: item.item.unit,
+      quantity_entered: item.item.quantity,
+      conversion_factor: item.item.quantity > 0 ? item.qty_in_inv_unit / item.item.quantity : 0,
+      quantity_in_inventory_unit: item.qty_in_inv_unit,
+      unit_price: item.item.unit_price,
+      base_purchase_price: item.base_purchase_price,
+      discount: item.item.discount,
+      line_total: lineTotal,
+      cogs: itemCogs,
     };
+    store.saleItems.push(saleItem);
+    totalCogs += itemCogs;
 
-    let totalCogs = 0;
+    // Batch allocations + deduct stock
+    for (const alloc of item.allocations) {
+      store.saleBatchAllocations.push({
+        id: ids.saleAllocations++,
+        sale_item_id: saleItem.id,
+        batch_id: alloc.batch_id,
+        quantity_allocated: alloc.quantity,
+        purchase_price: alloc.purchase_price,
+      });
 
-    // Create sale items + batch allocations + stock movements
-    for (const item of resolvedItems) {
-      const lineTotal = item.quantity * item.unit_price - item.discount;
-      let itemCogs = 0;
-
-      for (const alloc of item.allocations) {
-        itemCogs += alloc.quantity * alloc.purchase_price;
-      }
-
-      const saleItem: SaleItem = {
-        id: ids.saleItems++,
-        sale_id: sale.id,
-        product_id: item.product_id,
-        product_name: getProduct(item.product_id)?.trade_name ?? '',
-        batch_id: item.allocations[0]?.batch_id ?? null,
-        unit: item.unit,
-        quantity: item.quantity,
-        unit_name: item.unit,
-        quantity_entered: item.quantity,
-        conversion_factor: item.qty_in_inv_unit / item.quantity,
-        quantity_in_inventory_unit: item.qty_in_inv_unit,
-        unit_price: item.unit_price,
-        base_purchase_price: item.qty_in_inv_unit > 0 ? itemCogs / item.qty_in_inv_unit : 0,
-        discount: item.discount,
-        line_total: lineTotal,
-        cogs: itemCogs,
-      };
-      store.saleItems.push(saleItem);
-      totalCogs += itemCogs;
-
-      // Batch allocations + deduct stock
-      for (const alloc of item.allocations) {
-        store.saleBatchAllocations.push({
-          id: ids.saleAllocations++,
-          sale_item_id: saleItem.id,
-          batch_id: alloc.batch_id,
-          quantity_allocated: alloc.quantity,
-          purchase_price: alloc.purchase_price,
-        });
-
-        // Deduct from batch
-        const batch = store.batches.find(b => b.id === alloc.batch_id);
-        if (batch) {
-          batch.quantity -= alloc.quantity;
-          if (batch.quantity <= 0) {
-            batch.quantity = 0;
-            batch.status = 'DEPLETED';
-          }
-        }
-
-        // Stock movement
-        store.stockMovements.push({
-          id: ids.stockMovements++,
-          product_id: item.product_id,
-          batch_id: alloc.batch_id,
-          type: 'SALE',
-          quantity: -alloc.quantity,
-          unit: getProduct(item.product_id)?.inventory_unit ?? 'قطعة',
-          quantity_in_inventory_unit: -alloc.quantity,
-          reference_type: 'sale',
-          reference_id: sale.id,
-          note: null,
-          user_id: data.user_id ?? null,
-          created_at: now(),
-        });
-      }
-    }
-
-    // Update sale COGS and profit
-    sale.cogs = totalCogs;
-    sale.gross_profit = total - totalCogs;
-    store.sales.push(sale);
-
-    // Customer balance for credit sales
-    if ((data.sale_type === 'credit' || remaining > 0) && data.customer_id) {
-      const customer = store.customers.find(c => c.id === data.customer_id);
-      if (customer) {
-        customer.balance += remaining;
-        store.customerTransactions.push({
-          id: ids.customerTx++,
-          customer_id: data.customer_id,
-          type: 'sale',
-          amount: total,
-          balance_after: customer.balance,
-          reference_id: sale.id,
-          note: `فاتورة ${sale.invoice_number}`,
-          date: saleDate,
-          created_at: now(),
-        });
-        if (amountPaid > 0) {
-          store.customerTransactions.push({
-            id: ids.customerTx++,
-            customer_id: data.customer_id,
-            type: 'payment',
-            amount: -amountPaid,
-            balance_after: customer.balance,
-            reference_id: sale.id,
-            note: `دفعة من فاتورة ${sale.invoice_number}`,
-            date: saleDate,
-            created_at: now(),
-          });
+      // Deduct from batch
+      const batch = store.batches.find(b => b.id === alloc.batch_id);
+      if (batch) {
+        batch.quantity -= alloc.quantity;
+        if (batch.quantity <= 0) {
+          batch.quantity = 0;
+          batch.status = 'DEPLETED';
         }
       }
-    }
 
-    // Cash transaction
-    if (amountPaid > 0) {
-      store.cashTransactions.push({
-        id: ids.cashTx++,
-        type: 'SALE_CASH',
-        amount: amountPaid,
+      // Stock movement
+      store.stockMovements.push({
+        id: ids.stockMovements++,
+        product_id: item.item.product_id,
+        batch_id: alloc.batch_id,
+        type: 'SALE',
+        quantity: -alloc.quantity,
+        unit: item.product.inventory_unit,
+        quantity_in_inventory_unit: -alloc.quantity,
         reference_type: 'sale',
         reference_id: sale.id,
-        shift_id: data.shift_id ?? null,
-        note: `بيع نقدي - ${sale.invoice_number}`,
+        note: null,
         user_id: data.user_id ?? null,
-        date: saleDate,
         created_at: now(),
       });
     }
+  }
 
-    // Update shift totals
-    if (data.shift_id) {
-      const shift = store.shifts.find(s => s.id === data.shift_id);
-      if (shift) {
-        shift.total_sales += total;
-        shift.expected_cash = (shift.expected_cash || shift.opening_cash) + amountPaid;
+  // Update sale COGS and profit
+  sale.cogs = totalCogs;
+  sale.gross_profit = total - totalCogs;
+  store.sales.push(sale);
+
+  // Customer balance for credit sales
+  if ((data.sale_type === 'credit' || remaining > 0) && data.customer_id) {
+    const customer = prepared.customer;
+    if (customer) {
+      customer.balance += remaining;
+      store.customerTransactions.push({
+        id: ids.customerTx++,
+        customer_id: data.customer_id,
+        type: 'sale',
+        amount: total,
+        balance_after: customer.balance,
+        reference_id: sale.id,
+        note: `فاتورة ${sale.invoice_number}`,
+        date: saleDate,
+        created_at: now(),
+      });
+      if (amountPaid > 0) {
+        store.customerTransactions.push({
+          id: ids.customerTx++,
+          customer_id: data.customer_id,
+          type: 'payment',
+          amount: -amountPaid,
+          balance_after: customer.balance,
+          reference_id: sale.id,
+          note: `دفعة من فاتورة ${sale.invoice_number}`,
+          date: saleDate,
+          created_at: now(),
+        });
       }
     }
+  }
 
-    addAuditLog({
-      action: 'SALE_CREATE', entity: 'sale', entity_id: sale.id,
-      after_data: JSON.stringify({ invoice: sale.invoice_number, total }),
+  // Cash transaction
+  if (amountPaid > 0) {
+    store.cashTransactions.push({
+      id: ids.cashTx++,
+      type: 'SALE_CASH',
+      amount: amountPaid,
+      reference_type: 'sale',
+      reference_id: sale.id,
+      shift_id: data.shift_id ?? null,
+      note: `بيع نقدي - ${sale.invoice_number}`,
+      user_id: data.user_id ?? null,
+      date: saleDate,
+      created_at: now(),
     });
+  }
 
-    return { success: true, sale };
-    });
+  // Update shift totals
+  if (data.shift_id) {
+    const shift = prepared.shift;
+    if (shift) {
+      shift.total_sales += total;
+      shift.expected_cash = (shift.expected_cash || shift.opening_cash) + amountPaid;
+    }
+  }
+
+  addAuditLog({
+    action: 'SALE_CREATE', entity: 'sale', entity_id: sale.id,
+    after_data: JSON.stringify({ invoice: sale.invoice_number, total }),
+  });
+
+  return { success: true, sale };
+}
+
+export function createSale(data: NewSale, actor?: User | null): SaleResult {
+  const saleDenied = salePermissionError(data, actor);
+  if (saleDenied) return { success: false, error: saleDenied };
+  try {
+    const prepared = prepareSale(data);
+    if (!prepared.ok) return { success: false, error: prepared.error };
+    // Commit invoice, inventory, balances, cash and audit as one rollback-capable mutation.
+    return commitReturnAtomically(() => executePreparedSaleInMemory(prepared.prepared));
   } catch (e: any) {
     return { success: false, error: e?.message || 'خطأ غير متوقع' };
   }
 }
 
+// ─── SQL sale path (Phase 3) ────────────────────────────────────────
+// createSale is synchronous and expo-sqlite is async, so the SQL path
+// lives in this async twin: same permission checks and the same
+// prepareSale validation, then one SQL transaction, then the same rows
+// applied to the in-memory store. Screens adopt createSaleAsync
+// gradually; the synchronous createSale stays as the legacy path and as
+// the fallback when the typed store is not ready.
+
+/** Whether the SQL sale path can run. False until ensureTypedStoreReady()
+ * succeeds; createSaleAsync falls back to the legacy path when false. */
+export function isSqlSaleWriteEnabled(): boolean {
+  return isTypedStoreReady();
+}
+
+/** Serialises concurrent SQL sales: each sale's plan is built from the
+ * live store only after the previous SQL sale applied, so two sales can
+ * never reserve the same invoice number or over-sell the same batch. */
+let sqlSaleQueue: Promise<void> = Promise.resolve();
+
+/** Assemble a write plan from a prepared sale and the live counters. */
+function toPlanInput(prepared: PreparedSale): SalePlanInput {
+  const batches: Batch[] = [];
+  const seen = new Set<number>();
+  for (const item of prepared.items) {
+    for (const alloc of item.allocations) {
+      if (seen.has(alloc.batch_id)) continue;
+      seen.add(alloc.batch_id);
+      const batch = store.batches.find(b => b.id === alloc.batch_id);
+      if (batch) batches.push(batch);
+    }
+  }
+  return {
+    sale_type: prepared.data.sale_type,
+    customer_id: prepared.data.customer_id ?? null,
+    customer_name: prepared.customer_name,
+    customer: prepared.customer,
+    customer_balance_after: prepared.customer_balance_after,
+    customer_credit_limit: prepared.customer ? prepared.customer.credit_limit : null,
+    shift: prepared.shift,
+    user_id: prepared.data.user_id ?? null,
+    notes: prepared.data.notes ?? null,
+    date: prepared.sale_date,
+    subtotal: prepared.subtotal,
+    discount: prepared.data.discount,
+    total: prepared.total,
+    amount_paid: prepared.amount_paid,
+    change_given: prepared.change_given,
+    remaining: prepared.remaining,
+    total_cogs: prepared.total_cogs,
+    items: prepared.items.map((entry): PlannedSaleItem => ({
+      product_id: entry.item.product_id,
+      product_name: entry.product.trade_name,
+      inventory_unit: entry.product.inventory_unit,
+      unit: entry.item.unit,
+      quantity: entry.item.quantity,
+      qty_in_inv_unit: entry.qty_in_inv_unit,
+      unit_price: entry.item.unit_price,
+      discount: entry.item.discount,
+      line_total: entry.line_total,
+      item_cogs: entry.item_cogs,
+      base_purchase_price: entry.base_purchase_price,
+      allocations: entry.allocations.map(alloc => ({ ...alloc })),
+    })),
+    batches,
+    ids: { ...ids },
+    invoice_counter: invoiceCounter,
+    created_at: now(),
+    updated_at_iso: isoNow(),
+    device_id: getSyncDeviceId(),
+  };
+}
+
+/** Apply an executed SQL sale plan to the in-memory store: the same rows
+ * the transaction wrote, in the same order the legacy path pushes them.
+ * Then persistStore() records the outbox entries and writes the diff. */
+function applySalePlanToMemory(plan: SaleWritePlan): void {
+  for (const item of plan.saleItems) store.saleItems.push(item);
+  for (const alloc of plan.allocations) store.saleBatchAllocations.push(alloc);
+  for (const movement of plan.stockMovements) store.stockMovements.push(movement);
+  for (const updated of plan.updatedBatches) {
+    const batch = store.batches.find(b => b.id === updated.id);
+    if (batch) {
+      batch.quantity = updated.quantity;
+      batch.status = updated.status;
+    }
+  }
+  store.sales.push(plan.sale);
+  for (const tx of plan.customerTransactions) store.customerTransactions.push(tx);
+  if (plan.updatedCustomer) {
+    const customer = store.customers.find(c => c.id === plan.updatedCustomer?.id);
+    if (customer) customer.balance = plan.updatedCustomer.balance;
+  }
+  if (plan.cashTransaction) store.cashTransactions.push(plan.cashTransaction);
+  if (plan.updatedShift) {
+    const shift = store.shifts.find(s => s.id === plan.updatedShift?.id);
+    if (shift) {
+      shift.total_sales = plan.updatedShift.total_sales;
+      shift.expected_cash = plan.updatedShift.expected_cash;
+    }
+  }
+  store.auditLogs.push(plan.auditLog);
+  Object.assign(ids, plan.nextIds);
+  invoiceCounter = plan.nextInvoiceCounter;
+}
+
+/**
+ * Run one sale through the SQL transaction. Returns null when the typed
+ * store is unavailable (caller falls back to the legacy path). A failed
+ * SQL transaction returns a failure result and is NEVER retried on the
+ * legacy path: the transaction may have committed before the failure was
+ * observed, and a silent fallback could sell twice.
+ */
+async function executeSqlSale(data: NewSale): Promise<SaleResult | null> {
+  const getDb = persistenceBackend.getTypedDb;
+  if (typeof getDb !== 'function') return null;
+  const db = await getDb.call(persistenceBackend);
+  if (!db) return null;
+  try {
+    // Flush pending legacy writes first, so the counter check inside the
+    // transaction sees the same counters the plan is built from.
+    try {
+      await flushDatabaseWrites();
+    } catch {
+      // The in-transaction counter check below is the guard if the flush failed.
+    }
+    // Re-prepare inside the serialised queue: an earlier sale may have
+    // consumed the batches this sale planned against.
+    const prepared = prepareSale(data);
+    if (!prepared.ok) return { success: false, error: prepared.error };
+    const plan = buildSaleWritePlan(toPlanInput(prepared.prepared));
+    await executeSaleTransaction(db, plan);
+    applySalePlanToMemory(plan);
+    persistStore();
+    return { success: true, sale: plan.sale };
+  } catch (e: any) {
+    const message = typeof e?.message === 'string' ? e.message : '';
+    if (message === 'INSUFFICIENT_STOCK' || message.startsWith('INSUFFICIENT_STOCK')) {
+      return { success: false, error: 'المخزون غير كافٍ' };
+    }
+    if (message.startsWith('COUNTER_MISMATCH')) {
+      return { success: false, error: 'تعارض في أرقام الفواتير، أعد المحاولة' };
+    }
+    return { success: false, error: message || 'تعذّر حفظ البيع في قاعدة البيانات' };
+  }
+}
+
+/** Async twin of createSale: the sale runs inside one SQL transaction
+ * when the typed store is ready, and falls back to the legacy in-memory
+ * path otherwise. The result shape and validation errors are identical
+ * on both paths. */
+export async function createSaleAsync(data: NewSale, actor?: User | null): Promise<SaleResult> {
+  const saleDenied = salePermissionError(data, actor);
+  if (saleDenied) return { success: false, error: saleDenied };
+  try {
+    const first = prepareSale(data);
+    if (!first.ok) return { success: false, error: first.error };
+    if (await ensureTypedStoreReady()) {
+      const run = sqlSaleQueue.then(() => executeSqlSale(data));
+      sqlSaleQueue = run.then(
+        () => undefined,
+        () => undefined,
+      );
+      const result = await run;
+      if (result !== null) return result;
+    }
+    return commitReturnAtomically(() => executePreparedSaleInMemory(first.prepared));
+  } catch (e: any) {
+    return { success: false, error: e?.message || 'خطأ غير متوقع' };
+  }
+}
 export function cancelSale(id: number, reason: string, user_id?: number, actor?: User | null): void {
   const denied = checkPermission(actor, 'sales.cancel', 'sale');
   if (denied) throw new Error(denied);

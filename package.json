@@ -11,7 +11,7 @@
     "lint": "expo lint",
     "typecheck": "tsc --noEmit",
     "test": "pnpm run test:units",
-    "test:units": "rm -rf .test-build && pnpm exec tsc -p tsconfig.unit-tests.json && node --test tests/pharmacy-units.test.cjs tests/drug-catalog.test.cjs tests/cashbox.test.cjs tests/username-login.test.cjs tests/audit-fixes.test.cjs tests/permissions.test.cjs tests/sqlite-persistence.test.cjs; result=$?; rm -rf .test-build; exit $result"
+    "test:units": "rm -rf .test-build && pnpm exec tsc -p tsconfig.unit-tests.json && node --test tests/pharmacy-units.test.cjs tests/drug-catalog.test.cjs tests/cashbox.test.cjs tests/username-login.test.cjs tests/audit-fixes.test.cjs tests/permissions.test.cjs tests/sqlite-persistence.test.cjs tests/cloud-sync.test.cjs tests/sqlite-phase2.test.cjs tests/sqlite-phase3.test.cjs; result=$?; rm -rf .test-build; exit $result"
   },
   "dependencies": {
     "@expo/metro-runtime": "5.0.4",

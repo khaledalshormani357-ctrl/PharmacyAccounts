@@ -64,6 +64,52 @@ snapshot is migrated once into SQLite and the legacy copy is kept as a
 rollback. On web and in unit tests the backend is still AsyncStorage.
 Full details, schema, migration and rollback: `docs/SQLITE_MIGRATION.md`.
 
+## Persistence (SQLite, Phase 2 — typed tables and SQL reads)
+
+Phase 2 adds typed tables for the hot collections
+(`services/sqlite-typed.ts`, `SCHEMA_VERSION = '2'`) with indexes on
+`product_id`, `expiry_date` and `date`, migrated once from the generic
+tables (the generic tables are kept as the rollback source). Every
+write is mirrored into the typed tables inside the same transaction
+(dual-write). FEFO allocation, low-stock/expiry queries, sales and
+report summaries and dashboard KPIs are available as SQL queries
+(`allocateFefo`, `getLowStock`, `getSalesSummary`,
+`getReportSummarySql`, `getDashboardKpisSql`, …) behind new `*Async`
+variants in `erp-database.ts` that fall back to the in-memory
+computation on any failure; the synchronous read functions and the
+write path are unchanged. Full details: `docs/SQLITE_MIGRATION.md`
+(«Phase 2» section).
+
+## Persistence (SQLite, Phase 3 — the sale write moves to SQL)
+
+Phase 3 moves only the sale write (`createSale`) into a real SQL
+transaction (`services/sqlite-writes.ts`): a pure
+`buildSaleWritePlan` validates the credit limit and stock, allocates
+FEFO and assigns identifiers without writing anything, then
+`executeSaleTransaction` reserves the invoice counter, deducts the
+batches with a guarded `UPDATE` and writes every row inside one
+transaction — any failure rolls everything back. The same plan rows
+are then applied to the in-memory store and the sync outbox through
+the existing `persistStore()` mechanism. If the SQL transaction
+fails, `createSale` returns a failure instead of silently falling
+back to the old path (a silent retry could sell twice). When the
+typed store is not ready the old in-memory path runs unchanged, and
+purchases, returns and cancellations still use it. Full details:
+`docs/SQLITE_MIGRATION.md` («Phase 3» section).
+
+## Cloud sync (manual, Phase 1)
+
+Settings > «المزامنة السحابية» offers a manual **«مزامنة الآن»** button:
+the local outbox is pushed to Supabase (`supabase/006_cloud_sync.sql`,
+apply it manually in the dashboard after 001–005), then newer remote
+rows are pulled. Every row carries a global `syncId` (remote
+`client_id`); the local numeric `id` never leaves the device.
+Conflicts resolve per whole row, last-write-wins on `updatedAt`, ties
+broken by the larger device id. Local user accounts are never synced,
+invoice numbers stay per-device, and there is no Realtime or
+background sync yet. Full details, activation steps and known limits:
+`docs/CLOUD_SYNC.md`.
+
 ## Main Dependencies
 
 - React Native: 0.79.4
