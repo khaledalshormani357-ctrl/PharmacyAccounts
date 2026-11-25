@@ -76,9 +76,29 @@ Deno.serve(async (request: Request) => {
     return response({ error: 'invalid_request' }, 400);
   }
 
+  // New-style API keys are preferred (Supabase injects them as JSON
+  // objects, e.g. {"default": "sb_publishable_..."} in
+  // SUPABASE_PUBLISHABLE_KEYS / SUPABASE_SECRET_KEYS); the legacy JWT keys
+  // are the fallback until legacy keys are disabled for the project. The
+  // legacy anon key was committed to a public repo, so it must stop being
+  // used: the app and this function now run on the new keys.
+  function firstKey(value: string | undefined): string | undefined {
+    if (!value) return undefined;
+    const trimmed = value.trim();
+    if (trimmed.startsWith('{')) {
+      try {
+        const parsed = JSON.parse(trimmed) as Record<string, unknown>;
+        const first = Object.values(parsed).find((v) => typeof v === 'string' && v.length > 0);
+        if (typeof first === 'string') return first;
+      } catch {
+        // Fall through to comma-separated handling below.
+      }
+    }
+    return trimmed.split(',').map((part) => part.trim()).find(Boolean);
+  }
   const supabaseUrl = Deno.env.get('SUPABASE_URL');
-  const anonKey = Deno.env.get('SUPABASE_ANON_KEY');
-  const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+  const anonKey = firstKey(Deno.env.get('SUPABASE_PUBLISHABLE_KEYS')) ?? Deno.env.get('SUPABASE_ANON_KEY');
+  const serviceRoleKey = firstKey(Deno.env.get('SUPABASE_SECRET_KEYS')) ?? Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
   if (!supabaseUrl || !anonKey || !serviceRoleKey) {
     return response({ error: 'service_unavailable' }, 503);
   }
