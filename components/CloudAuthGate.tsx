@@ -3,10 +3,9 @@ import { ActivityIndicator, View } from 'react-native';
 import { useRouter, useSegments } from 'expo-router';
 import { AuthProvider, useAuth } from '@/template';
 import { clearCurrentActor } from '@/services/session';
+import { getSupabasePublicConfig } from '@/template/core/supabase-env';
 
-const supabaseConfigured = Boolean(
-  process.env.EXPO_PUBLIC_SUPABASE_URL && process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY
-);
+const supabaseConfigured = Boolean(getSupabasePublicConfig());
 
 function CloudAuthContent({ children }: { children: ReactNode }) {
   const { user, loading, initialized } = useAuth();

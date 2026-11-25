@@ -1,5 +1,6 @@
 // @ts-nocheck
 import { OnSpaceConfig } from './types';
+import { getSupabasePublicConfig } from './supabase-env';
 
 class ConfigManager {
   private static instance: ConfigManager;
@@ -30,8 +31,9 @@ class ConfigManager {
   }
 
   private createDefaultConfig(): OnSpaceConfig {
-    const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
-    const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+    const publicConfig = getSupabasePublicConfig();
+    const supabaseUrl = publicConfig?.url;
+    const supabaseAnonKey = publicConfig?.anonKey;
 
     let authConfig;
     let supabaseConfig;
@@ -110,8 +112,9 @@ export const createConfig = (options: CreateConfigOptions = {}): OnSpaceConfig =
 
   let supabaseConfig;
   if (authConfig !== false) {
-    const supabaseUrl = options.supabase?.url || process.env.EXPO_PUBLIC_SUPABASE_URL;
-    const supabaseAnonKey = options.supabase?.anonKey || process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+    const publicConfig = getSupabasePublicConfig();
+    const supabaseUrl = options.supabase?.url || publicConfig?.url;
+    const supabaseAnonKey = options.supabase?.anonKey || publicConfig?.anonKey;
 
     if (!supabaseUrl || !supabaseAnonKey) {
       console.warn('[Template:Config] Auth feature enabled but Supabase configuration missing, automatically disabling auth module');
