@@ -444,7 +444,11 @@ alter table public.product_units
   add column if not exists client_id uuid unique,
   add column if not exists product_client_id uuid,
   add column if not exists deleted_at timestamptz,
-  add column if not exists device_id text;
+  add column if not exists device_id text,
+  -- product_units never had updated_at in 001, but the sync indexes below
+  -- filter on (pharmacy_id, updated_at); add it here so the migration
+  -- applies cleanly on a database created from 001.
+  add column if not exists updated_at timestamptz not null default now();
 
 -- product_units.product_id references the remote products row (uuid). The
 -- sync link is product_client_id; product_id is filled best-effort when the
