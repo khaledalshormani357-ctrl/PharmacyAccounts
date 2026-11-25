@@ -45,6 +45,12 @@
     ],
     "experiments": {
       "typedRoutes": false
+    },
+    "extra": {
+      "supabase": {
+        "url": "https://pzakfnlmodwqxrmtzxiq.supabase.co",
+        "anonKey": "sb_publishable_W0PxfQKKA5NRmCkNtmB3VQ_spcJo8Pa"
+      }
     }
   }
 }

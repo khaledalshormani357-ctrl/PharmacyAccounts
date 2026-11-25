@@ -4,6 +4,7 @@ import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import 'react-native-url-polyfill/auto';
 import { SupabaseConfig } from './types';
+import { getSupabasePublicConfig } from './supabase-env';
 
 class SupabaseManager {
   private static instance: SupabaseClient | null = null;
@@ -26,12 +27,13 @@ class SupabaseManager {
     try {
       console.log(`[Template:Client] Creating Supabase client instance #${this.creationCount}`);
       
-      const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
-      const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
-      
+      const publicConfig = getSupabasePublicConfig();
+      const supabaseUrl = publicConfig?.url;
+      const supabaseAnonKey = publicConfig?.anonKey;
+
       if (!supabaseUrl || !supabaseAnonKey) {
-        const errorMsg = '[Template:Client] Supabase environment variables missing\n' +
-          'Please check EXPO_PUBLIC_SUPABASE_URL and EXPO_PUBLIC_SUPABASE_ANON_KEY in .env file';
+        const errorMsg = '[Template:Client] Supabase configuration missing\n' +
+          'Please check EXPO_PUBLIC_SUPABASE_URL and EXPO_PUBLIC_SUPABASE_ANON_KEY in .env file, or expo.extra.supabase in app.json';
         console.error(errorMsg);
         throw new Error(errorMsg);
       }
